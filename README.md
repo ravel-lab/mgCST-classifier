@@ -14,6 +14,6 @@ Full paths to the following files/directories must be supplied in this order:
 (1) summary.Abundance.txt
 (2) summary.NR.abundance.txt
 (3) VIRGO-master directory
-(4) reference centroids
+(4) mgCST-classifier-master directory
 
-Example: Rscript classify_mgCST_centroid.R summary.Abundance.txt summary.NR.abundance.txt /full/path/to/VIRGO-master mgCST_centroids_22Jun2022.csv
+Example: Rscript classify_mgCST_centroid.R summary.Abundance.txt summary.NR.abundance.txt /full/path/to/VIRGO-master /full/path/to/mgCST-classifier-master
