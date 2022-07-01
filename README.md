@@ -16,7 +16,7 @@ Full paths to the following files/directories must be supplied in this order:
 
 Example: 
 
-Rscript classify_mgCST_centroid.R example/summary.Abundance.txt example/summary.NR.abundance.txt /full/path/to/VIRGO-master /full/path/to/mgCST-classifier-master
+Rscript classify_mgCST_centroid.R   example/summary.Abundance.txt   example/summary.NR.abundance.txt   /full/path/to/VIRGO-master   /full/path/to/mgCST-classifier-master
 
 Output is written to current directory. Each output file is dated.
 
