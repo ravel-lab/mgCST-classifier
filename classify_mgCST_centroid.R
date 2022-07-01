@@ -47,7 +47,7 @@ a<-which(names(genes) %in% "Taxa")
 a<-a+1
 genes.ngl<-genes
 genes.ngl[,a:ncol(genes.ngl)]<-apply(genes[,a:ncol(genes)], 2, function(x) x*150/genes[["Length"]])
-write.csv(genes.ngl, paste(wd, "/norm_counts_", today2, ".csv", sep=""), quote=F)
+#write.csv(genes.ngl, paste(wd, "/norm_counts_", today2, ".csv", sep=""), quote=F)
 
 ## Make gene table presence/absence
 genes.ngl.pa<-genes
