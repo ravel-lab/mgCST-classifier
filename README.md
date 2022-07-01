@@ -1,6 +1,6 @@
 # mgCST-classifier
 When used in concert with the vaginal non-redundant gene database (VIRGO), assigns metagenomic community state types (mgCSTs) to vaginal metagenomes. 
-This script *requires* VIRGO output files.
+This script *requires* VIRGO output files "summary.Abundance.txt" and "summary.NR.abundance.txt" as well as VIRGO reference file 0.geneLength.txt.
 
 To Use: 
   1. Clone this repository
