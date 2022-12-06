@@ -131,7 +131,8 @@ yue_distance<-function(row, median){
 }
 
 ## read in reference centroids
-reference_centroids<-as.data.frame(read.csv(args[4], header = TRUE, row.names = 1))
+cent<-list.files(path=args[4], pattern="centroids", full.names = TRUE)
+reference_centroids<-as.data.frame(read.csv(cent, header = TRUE, row.names = 1))
 ## make relabund table fresh
 relabund<-counts.mgss.ngl/rowSums(counts.mgss.ngl)
 ## reformat relabund to include all expected column names (xvar.names)
