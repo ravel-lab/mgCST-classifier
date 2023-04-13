@@ -1,8 +1,14 @@
 # mgCST-classifier
+
+## Requirements
+R version 4.2.2 (2022-10-31) or higher 
+randomForestSRC 3.2.1
+gplots 3.1.3
+
+## To Use: 
 When used in concert with the vaginal non-redundant gene database (VIRGO), assigns metagenomic community state types (mgCSTs) to vaginal metagenomes. 
 This script *requires* VIRGO output files "summary.Abundance.txt" and "summary.NR.abundance.txt" as well as VIRGO reference file 0.geneLength.txt.
 
-To Use: 
   1. Clone this repository
   2. Download the metagenomic subspecies random forest classifier from https://figshare.com/ndownloader/files/36123449 and place in the github repository directory. 
   3. Run data through VIRGO (https://virgo.igs.umaryland.edu).
