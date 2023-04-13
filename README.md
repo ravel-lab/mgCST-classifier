@@ -1,9 +1,9 @@
 # mgCST-classifier
 
 ## Requirements
-R version 4.2.2 (2022-10-31) or higher 
-randomForestSRC 3.2.1
-gplots 3.1.3
+R version 4.2.2 (2022-10-31) or higher<br>
+randomForestSRC version 3.2.1<br>
+gplots veresion 3.1.3<br>
 
 ## To Use: 
 When used in concert with the vaginal non-redundant gene database (VIRGO), assigns metagenomic community state types (mgCSTs) to vaginal metagenomes. 
@@ -14,11 +14,11 @@ This script *requires* VIRGO output files "summary.Abundance.txt" and "summary.N
   3. Run data through VIRGO (https://virgo.igs.umaryland.edu).
   4. Run classifier. The classifier will first assign metagenomic subspecies using the mgss_classifier.RDS file downloaded from figshare. It will then assign metagenomic CSTs to each sample using a nearest-neighbor, centroid-based classifier. 
 
-Full paths to the following files/directories must be supplied in this order:
-(1) summary.Abundance.txt
-(2) summary.NR.abundance.txt
-(3) VIRGO-master directory
-(4) mgCST-classifier-master directory
+Full paths to the following files/directories must be supplied in this order:<br>
+(1) summary.Abundance.txt<br>
+(2) summary.NR.abundance.txt<br>
+(3) VIRGO-master directory<br>
+(4) mgCST-classifier-master directory<br>
 
 Example: 
 
@@ -34,4 +34,6 @@ Output files:
 
 *mgCSTs_1Jul2022.csv*: Two-column table with sample ID and mgCST assignment
 
-*norm_counts_mgSs_mgCST_1Jul2022.csv*: Gene abundances normalized by gene length of metagenomic subspecies (columns) by samples (rows). Right-most column contains mgCST classification. Normalization assumed 150 bp long reads: (Gene_Abundance*150)/Gene_Length
+*norm_counts_mgSs_mgCST_1Jul2022.csv*: Gene abundances normalized by gene length of metagenomic subspecies (columns) by samples (rows). Right-most column contains mgCST classification. <br>
+
+## NOTE: Gene Count Normalization assumes 150 bp long reads: (Gene_Abundance*150)/Gene_Length
