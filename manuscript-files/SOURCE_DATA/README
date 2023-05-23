@@ -1,0 +1,13 @@
+Input files for File_S7.RDS for generation of mgSs and mgCSTs
+
+Packages required: 
+library(philentropy)
+library(dynamicTreeCut)
+library(plyr)
+library(dplyr)
+library(tidyverse)
+library(gplots)
+library(ggplot2)
+library(reshape2)
+library(RColorBrewer)
+require(readxl)
