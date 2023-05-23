@@ -1,0 +1,1337 @@
+---
+title: "mgCST_paper_stats"
+author: "Johanna B. Holm, PhD"
+date: "11/9/2022"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Color Tables
+```{r Colors }
+CST<-as.data.frame(rbind(c("I", "#FE0308"),c("I-A", "#FE0308"), c("I-B", "#F6D3DA"), c("II", "#86C61A"),c("III", "#FF7200"),c("III-A", "#FF7200"),c("III-B", "#F8A40E"), c("IV", "#221886"),c("IV-A", "#448A73"), c("IV-B", "#221886"), c("IV-C", "#C0ACD3"),c("IV-C0", "#989898"),c("IV-C1", "#EF53A7"),c("IV-C2", "#A7DDDC"),c("IV-C3", "#98C999"),c("IV-C4", "#7F0B7C"), c("V", "#FAE50D"), c("", "white"), c("NA", "white")))
+names(CST)<-c("CST", "color")
+
+mgCST<-as.data.frame(rbind(c("1", "#FE0308"),c("2", "#F54C5E"), c("3", "#F07084"), c("4", "#EC94A5"),c("5", "#F0BCCC"),c("6", "#F6D3DA"),c("7", "#86C61A"), c("8", "#B4DB29"),c("9", "#DBEA77"), c("10", "#FF7200"), c("11", "#F68A11"),c("12", "#F8A40E"),c("13", "#F3BC11"),c("14", "#f7d15a"), c("15", "#FAE50D"),c("16", "#F3F46E"),c("17", "#448A73"),c("18", "#89BEAB"), c("19", "#BCD6CD"),c("20", "#221886"),c("21", "#3E3792"),c("22", "#5D579E"),c("23", "#7C76AC"),c("24", "#9A98BF"),c("25", "#C9C8D8"),c("26", "#98C999"), c("27", "#989898"), c("", "white"), c("NA", "white")))
+names(mgCST)<-c("mgCST", "color")
+
+# Date
+today <- strsplit(date(), " ")
+month <- today[[1]][2]
+day <- today[[1]][3]
+year <- today[[1]][5]
+today2 <- paste(day,month,year, sep="")
+```
+#Packages
+```{r}
+# Packages
+require(irr)
+require(reshape2)
+require(readxl)
+require(dplyr)
+library(ggplot2)
+library(EnvStats)
+require(dplyr)
+require(randomForestSRC)
+require(epitools)
+require(dendextend)
+require(ggpubr)
+library(extrafont)
+library(samplesizeCMH)
+require(stringr)
+require(data.table)
+```
+
+
+# Read in data
+```{r}
+getwd()
+mgCSTs.samples.meta<-as.data.frame(read_excel("RDS_files/Supplemental_File_6.xlsx", skip = 3, na = c("NA", "#N/A")))
+ngl.abund<-readRDS("RDS_files/ngl.abund.RDS") ## The abundance of each species in a sample, normalized for gene length
+ngl.nGenes<-readRDS("RDS_files/ngl.nGenes.RDS") ## The number of genes of each species in a sample, normalized for gene length
+ngl.abund.clusters.cast<-readRDS("RDS_files/ngl.abund.clusters.cast.RDS") ## The abundance of each mgSs in a sample
+ngl.gene.counts.cast<-read.csv("RDS_files/norm_counts_genes_15May2023.csv")
+ngl.gene.counts.list.mgSs.pa.clean<-readRDS("RDS_files/ngl.gene.counts.list.mgSs.pa.clean.RDS") ## The list of gene count tables by species
+relabund<-ngl.abund.clusters.cast/rowSums(ngl.abund.clusters.cast)
+genes.clusters <- readRDS("RDS_files/genes.clusters.RDS")
+samples.clusters <- readRDS("RDS_files/samples.clusters.updated.RDS")
+genes.hc<-readRDS("RDS_files/genes.hc.RDS")
+samples.hc<-readRDS("RDS_files/samples.hc.RDS")
+samples.dist<-readRDS("RDS_files/samples.dist.RDS")
+all.clean.info.vog<-readRDS("RDS_files/all.clean.info.vog.RDS")
+all.clean.100k<-read.csv("RDS_files/all.clean.100k.csv", header = T, row.names = 1, check.names = F)
+ngl.gene.counts.m<-readRDS("RDS_files/ngl.gene.counts.m.RDS")
+gv.sp.mgss.genes<-readRDS("RDS_files/gv.sp.mgss.genes.RDS")
+```
+
+
+# mgSs and mgCST Classification
+## Random Forest classifier for mgSS
+```{r randomClassifier for all mgSS, 10Fold CV}
+names(ngl.gene.counts.list.mgSs.pa.clean)[3]<-"Ca._Lachnocurva_vaginae"
+names(samples.clusters)[5]<-"Ca._Lachnocurva_vaginae"
+
+nReads<-colSums(all.clean.100k)
+
+require(randomForestSRC)
+## Perform tuning for major taxa --- NOTE: Gvag too many genes for tuning - go with default of classifier
+tuning<-list()
+for (i in c("Lactobacillus_crispatus", "Lactobacillus_gasseri", "Lactobacillus_jensenii", "Lactobacillus_iners", "Ca._Lachnocurva_vaginae")){
+  #the.genes<-names(as.data.frame(t(ngl.gene.counts.list.mgSs.pa.clean[[i]])))
+  the.data<-as.data.frame(t(ngl.gene.counts.list.mgSs.pa.clean[[i]]))
+  if(i %in% "Gardnerella_vaginalis"){
+    the.data<-as.data.frame(t(ngl.gene.counts.list.mgSs.pa.clean[[i]][,colnames(ngl.gene.counts.list.mgSs.pa.clean[[i]]) %in% names(nReads[nReads > 1000000])]))
+  }
+  #the.data<-the.data[,the.genes]
+  sample.clusters1<-samples.clusters[[i]]
+  the.data<-the.data[, colSums(the.data) > min(table(sample.clusters1[["sample_cluster"]]))]
+  the.data[["mgss"]]<-as.vector(sample.clusters1[match(rownames(the.data), sample.clusters1$sampleID), "sample_cluster"])
+  the.data<-the.data[!the.data$mgss %in% "untyped", ]
+  the.data[["mgss"]]<-factor(the.data[["mgss"]])
+  the.data<-the.data[!is.na(the.data$mgss), colSums(the.data[, !names(the.data) %in% "mgss"]) > 0]
+  if(i %in% "Gardnerella_vaginalis"){
+    tuning<-tune.rfsrc(mgss~., the.data,
+      mtryStart = 500,
+      nodesizeTry = c(1:9, seq(10, 100, by = 5)), ntreeTry = 500,
+      sampsize = function(x){min(x * .632, max(150, x ^ (3/4)))}, 
+      nsplit = 1, stepFactor = 1.25, improve = 1e-3, strikeout = 3, maxIter = 25,
+      trace = FALSE, doBest = TRUE)
+  }else{ tuning<-tune.rfsrc(mgss~., the.data,
+      mtryStart = ncol(the.data) / 2,
+      nodesizeTry = c(1:9, seq(10, 100, by = 5)), ntreeTry = ncol(the.data)*0.1,
+      sampsize = function(x){min(x * .632, max(150, x ^ (3/4)))}, 
+      nsplit = 1, stepFactor = 1.25, improve = 1e-3, strikeout = 3, maxIter = 25,
+      trace = FALSE, doBest = TRUE)
+  }
+  saveRDS(tuning, paste("RDS_files/", i, "_fineTuning.RDS", sep=""))
+}
+
+ggplot(li.tune.df[li.tune.df$nodesize==1,], aes(y=err, x=mtry))+geom_point()+ylab("Rate of Classification Error")+xlab("mtry")+ggtitle("L. iners Tuning mtry, nodesize=1")+theme_bw()
+ggsave("RDS_files/liners_tuning_mtry.pdf", height=3, width=5)
+ggplot(li.tune.df, aes(y=err, x=nodesize))+geom_point()+ylab("Rate of Classification Error")+xlab("nodesize")+ggtitle("L. iners Tuning nodesize")+theme_bw()
+ggsave("RDS_files/liners_tuning_nodesize.pdf", height=3, width=5)
+
+## Build table w/tuning parameters for major taxa
+optimal.tbl<-as.data.frame(rbind(cbind(Taxa="Lactobacillus_crispatus", nodes=5, mtry=365), cbind(Taxa="Lactobacillus_gasseri", nodes=4, mtry=714), cbind(Taxa="Lactobacillus_jensenii", nodes=2, mtry=1868), cbind(Taxa="Lactobacillus_iners", nodes=1, mtry=1410), cbind(Taxa="Ca._Lachnocurva_vaginae", nodes=1, mtry=279)))
+
+classifiers<-list()
+predicted<-list()
+set.seed(123)
+mgss.cv<-data.frame()
+#Perform 10 fold cross validation for each mgSs.
+for(i in names(samples.clusters)){
+  the.data<-as.data.frame(t(ngl.gene.counts.list.mgSs.pa.clean[[i]]))
+  if(i %in% "Gardnerella_vaginalis"){
+    the.data<-as.data.frame(t(ngl.gene.counts.list.mgSs.pa.clean[[i]][,colnames(ngl.gene.counts.list.mgSs.pa.clean[[i]]) %in% names(nReads[nReads > 1000000])]))
+  }
+  sample.clusters1<-samples.clusters[[i]]
+  the.data<-the.data[, colSums(the.data) > min(table(sample.clusters1[["sample_cluster"]]))]
+  the.data[["mgss"]]<-as.vector(sample.clusters1[match(rownames(the.data), sample.clusters1$sampleID), "sample_cluster"])
+  the.data[["mgss"]]<-factor(the.data[["mgss"]])
+  the.data<-the.data[!is.na(the.data$mgss), colSums(the.data[, !names(the.data) %in% "mgss"]) > 0]
+  the.node<-as.numeric(optimal.tbl[optimal.tbl$Taxa %in% i, "nodes"])
+  the.mtry<-as.numeric(optimal.tbl[optimal.tbl$Taxa %in% i, "mtry"])
+  #Randomly shuffle the data
+  the.data<-the.data[sample(nrow(the.data)),]
+  #Create 10 equally size folds
+  folds <- cut(seq(1,nrow(the.data)),breaks=10,labels=FALSE)
+  for(n in 1:10){
+    #Segement your data by fold using the which() function 
+    testIndexes <- which(folds==n, arr.ind=TRUE)
+    testing <- the.data[testIndexes, ]
+    training <- the.data[-testIndexes, ]
+    #Use the test and train data partitions however you desire..
+    if(length(the.mtry) > 0){
+    classifiers[[i]]<- rfsrc.fast(mgss~., training, ntree = ncol(the.data)*0.5, forest = TRUE, nodes=the.node, mtry=the.mtry)
+  }else{
+    classifiers[[i]]<- rfsrc.fast(mgss~., training, ntree = ncol(the.data)*0.5, forest = TRUE)
+  }
+    predicted[[i]]<-predict.rfsrc(classifiers[[i]], testing)
+    mgss.cv<-rbind(mgss.cv, cbind(Taxon=i, CV=n, err=predicted[[i]]$err.rate[nrow(predicted[[i]]$err.rate)]))
+  }
+} 
+
+mgss.cv$Taxon<-gsub("_", " ", mgss.cv$Taxon)
+ggplot(mgss.cv, aes(y=reorder(Taxon, as.numeric(err)), x=as.numeric(err)))+geom_boxplot(notch=FALSE, outlier.shape = NA, lwd=0.1, fill="gray")+geom_jitter(width=0.001, size=0.01)+xlab("Out of Bag Error Rate")+theme_bw()+ylab("")+theme(text=element_text(size=12))
+ggsave("RDS_files/mgSs_oob_err.pdf", height=7, width=6)
+#ggplot(mgss.cv, aes(y=reorder(Taxon, as.numeric(err)), x=as.numeric(err)))+geom_violin(lwd=0.1, fill="gray")+geom_jitter(width=0.01, size=0.1)+xlab("Out of Bag Error Rate")+theme_bw()+ylab("")
+
+## Full classifier for use
+mgss.classifier<-list()
+#for (i in c("Lactobacillus_crispatus", "Lactobacillus_gasseri", "Lactobacillus_jensenii", "Lactobacillus_iners", "BVAB1", "Gardnerella_vaginalis")){
+for (i in names(samples.clusters)){
+  the.data<-as.data.frame(t(ngl.gene.counts.list.mgSs.pa.clean[[i]]))
+  if(i %in% "Gardnerella_vaginalis"){
+    the.data<-as.data.frame(t(ngl.gene.counts.list.mgSs.pa.clean[[i]][,colnames(ngl.gene.counts.list.mgSs.pa.clean[[i]]) %in% names(nReads[nReads > 1000000])]))
+  }
+  sample.clusters1<-samples.clusters[[i]]
+  the.data<-the.data[, colSums(the.data) > min(table(sample.clusters1[["sample_cluster"]]))]
+  the.data[["mgss"]]<-as.vector(sample.clusters1[match(rownames(the.data), sample.clusters1$sampleID), "sample_cluster"])
+  the.data<-the.data[!the.data$mgss %in% "untyped", ]
+  the.data[["mgss"]]<-factor(the.data[["mgss"]])
+  the.mtry<-as.numeric(optimal.tbl[optimal.tbl$Taxa %in% i, "mtry"])
+  the.node<-as.numeric(optimal.tbl[optimal.tbl$Taxa %in% i, "nodes"])
+  the.data<-the.data[!is.na(the.data$mgss), colSums(the.data[, !names(the.data) %in% "mgss"]) > 0]
+  if(length(the.mtry) > 0){
+    mgss.classifier[[i]] <- rfsrc.fast(mgss~., the.data, forest = TRUE, nodes=the.node, mtry=the.mtry)
+  }else{
+    mgss.classifier[[i]] <- rfsrc.fast(mgss~., the.data, forest = TRUE)
+  }
+}
+## update mgss.classifier to reflect correct bvab1 name, as in the updated VIRGO taxon table.
+saveRDS(mgss.classifier, "RDS_files/mgss_classifier.RDS")
+
+## confusion matrix ## Not sure how to get the confusion matrix yet.
+mgss.classifier<-readRDS("RDS_files/mgss_classifier.RDS")
+
+confus.mat<-read.csv("RDS_files/mgcst_classification_err.csv", header=T, check.names = F)
+relabund<-confus.mat
+relabund[,2:ncol(confus.mat)]<-confus.mat[,2:ncol(confus.mat)]/rowSums(confus.mat[,2:ncol(confus.mat)])
+confus.mat.m<-reshape2::melt(relabund, id.vars="observed", variable.name="predicted", value.name="n")
+ggplot(data =  confus.mat.m, mapping = aes(y = factor(observed), x = factor(predicted))) +
+  xlab("Observed mgCST")+
+  ylab("Predicted mgCST")+
+  geom_tile(aes(fill = n), colour = "white") +
+  scale_fill_gradient(low = "white", high = "black")+
+  theme_classic()
+ggsave("RDS_files/mgCST_Confusion_plot_relabund.pdf", height=5, width=7)
+```
+
+
+## Centroid based classifier for mgCST
+```{r mgcst classifier}
+original.mgCST<-
+relabund$mgCST<-mgCSTs.samples.meta[match(rownames(relabund), mgCSTs.samples.meta$SID), "mgCST"]
+relabund$mgCST<-factor(relabund$mgCST)
+
+# Centroid based classifier - USE
+for(n in 1:10){
+  #Segment your data by fold using the which() function
+  testIndexes <- which(folds==n, arr.ind=TRUE)
+  ## testing has to be read counts
+  testing <- ngl.abund.clusters.cast[testIndexes, ]
+  ## training has to be relative abundances
+  training <- relabund[-testIndexes, ]
+  training$SID<-rownames(training)
+  the.data.m<-reshape2::melt(training, id.vars = c("SID", "mgCST"), value.name = "relabund", variable.name = "Taxon")
+  centroids<-reshape2::dcast(the.data.m, mgCST~Taxon, value.var = "relabund", fun.aggregate = mean)
+  centroids$mgCST<-paste("mgCST ", centroids$mgCST, sep="")
+  write.csv(centroids, paste("~/VALENCIA-master/mgCST_centroids_cv", n, ".csv", sep=""), row.names = F, quote=F)
+  testing$mgCST<-NULL
+  testing$read_count<-rowSums(testing)
+  testing$SID<-rownames(testing)
+  testing<-testing[moveme(names(testing), "read_count first")]
+  testing<-testing[moveme(names(testing), "SID first")]
+  write.csv(testing, paste("~/VALENCIA-master/mgCST_testing_cv", n, ".csv", sep=""), row.names = F, quote=F)
+}
+## run valencia mgcst:
+## for i in {1..10}; do python3 mgCST_Classifier.py -ref mgCST_centroids_cv"$i".csv -i mgCST_testing_cv"$i".csv -o cv_"$i"; done
+file.list <- list.files(path = "~/VALENCIA-master", pattern='^cv_*', full.names = T)
+df.list <- lapply(file.list, function(x) read.csv(file=x))
+maps<-do.call("rbind", df.list)
+cv<-maps[,c("SID", "read_count", "mgCST", "score")]
+cv$mgCST_pred<-gsub(pattern="mgCST ", replacement = "", cv$mgCST)
+cv$mgCST_obs<-mgCSTs.samples.meta[match(cv$SID, mgCSTs.samples.meta$SID), "mgCST"]
+cv.df<-reshape2::dcast(cv, mgCST_obs~mgCST_pred, value.var = "mgCST_obs")
+cv.err.centroids<-as.data.frame(cbind(mgCST=1:27, accuracy=apply(cv.df[,2:ncol(cv.df)], 1, function(x) max(x)/sum(x))))
+# mean(cv.err.centroids$accuracy)
+# [1] 0.9042857
+## 
+relabund<-cv.df
+relabund<-relabund[order(relabund$mgCST_obs), ]
+relabund<-relabund[,c("mgCST_obs", as.character(1:27))]
+relabund[,2:ncol(relabund)]<-relabund[,2:ncol(relabund)]/rowSums(relabund[,2:ncol(relabund)])
+cv.df.m<-reshape2::melt(relabund, id.vars="mgCST_obs", variable.name="predicted", value.name="n")
+cv.df.m$predicted<-factor(cv.df.m$predicted, levels = as.character(1:27))
+ggplot(data =  cv.df.m, mapping = aes(y = as.factor(mgCST_obs), x = as.factor(predicted))) +
+  xlab("Predicted mgCST")+
+  ylab("Observed mgCST")+
+  geom_tile(aes(fill = n), colour = "white") +
+  scale_fill_gradient(low = "white", high = "black")+
+  theme_classic()
+ggsave("mgCST_Confusion_plot_relabund_centroids.pdf", height=5, width=7)
+
+## Write out centroids
+relabund<-ngl.abund.clusters.cast/rowSums(ngl.abund.clusters.cast)
+relabund$SID<-rownames(relabund)
+relabund$mgCST<-mgCSTs.samples.meta[match(rownames(relabund), mgCSTs.samples.meta$SID), "mgCST"]
+relabund$mgCST<-factor(relabund$mgCST)
+the.data.m<-reshape2::melt(relabund, id.vars = c("SID", "mgCST"), value.name = "relabund", variable.name = "Taxon")
+centroids<-reshape2::dcast(the.data.m, mgCST~Taxon, value.var = "relabund", fun.aggregate = mean)
+centroids$mgCST<-paste("mgCST ", centroids$mgCST, sep="")
+write.csv(centroids, paste("~/VALENCIA-master/mgCST_centroids_", today2, ".csv", sep=""), row.names = F, quote=F)
+```
+
+### Evaluate similarity scores for samples in dataset, and for other external samples
+```{r}
+## Internal (self classification)
+class<-read.csv("../SUPPLEMENTAL_FILES/mgCST_paper_classified/relabund_w_mgCSTs_15May2023.csv")
+int<-melt(class[,c(1,405:(ncol(class)))], id.vars=c("X", "mgCST"), variable.name = "mgCST comp", value.name = "Similarity to assigned mgCST")
+sims<-int[int$mgCST == gsub("\\.", " ", int$`mgCST comp`), ]
+sims$type<-"Training"
+
+## External dataset 1 (PRJEB34536)
+class<-read.csv("PRJEB34536/relabund_w_mgCSTs_17May2023.csv")
+ext<-melt(class[,c(1,405:(ncol(class)))], id.vars=c("X", "mgCST"), variable.name = "mgCST comp", value.name = "Similarity to assigned mgCST")
+sims<-rbind(sims, cbind(ext[ext$mgCST == gsub("\\.", " ", ext$`mgCST comp`), ], type="External 1 (PRJEB34536), n=89"))
+Reads<-read.delim("PRJEB34536/summary.Abundance.txt")
+rownames(Reads)<-Reads$PC
+Reads$PC<-NULL
+nReads<-as.data.frame(cbind(study="PRJEB34536", nReads=rowSums(Reads), mgCST=class[match(rownames(Reads), class$X), "mgCST"]))
+
+## External dataset 2 (PRJNA576566)
+class<-read.csv("PRJNA576566/relabund_w_mgCSTs_17May2023.csv")
+ext<-melt(class[,c(1,405:(ncol(class)))], id.vars=c("X", "mgCST"), variable.name = "mgCST comp", value.name = "Similarity to assigned mgCST")
+sims<-rbind(sims, cbind(ext[ext$mgCST == gsub("\\.", " ", ext$`mgCST comp`), ], type="External 2 (PRJNA576566), n=66"))
+Reads<-read.delim("PRJNA576566/summary.Abundance.txt")
+rownames(Reads)<-Reads$PC
+Reads$PC<-NULL
+nReads<-as.data.frame(rbind(nReads, cbind(study="PRJNA576566", nReads=rowSums(Reads), mgCST=class[match(rownames(Reads), class$X), "mgCST"])))
+
+## External dataset 3 (PRJNA779415)
+class<-read.csv("PRJNA779415/relabund_w_mgCSTs_17May2023.csv")
+ext<-melt(class[,c(1,405:(ncol(class)))], id.vars=c("X", "mgCST"), variable.name = "mgCST comp", value.name = "Similarity to assigned mgCST")
+sims<-rbind(sims, cbind(ext[ext$mgCST == gsub("\\.", " ", ext$`mgCST comp`), ], type="External 3 (PRJNA779415), n=47"))
+Reads<-read.delim("PRJNA779415/summary.Abundance.txt")
+rownames(Reads)<-Reads$PC
+Reads$PC<-NULL
+nReads<-as.data.frame(rbind(nReads, cbind(study="PRJNA779415", nReads=rowSums(Reads), mgCST=class[match(rownames(Reads), class$X), "mgCST"])))
+
+ggplot(sims, aes(x=`Similarity to assigned mgCST`, fill=type))+geom_histogram(bins = 20, alpha=0.7)+theme_bw()+facet_wrap(~type, ncol = 1, scales="free_y")+scale_fill_manual(values=c( "green", "blue","red", "black"))+ylab("Density")+theme(legend.position = "none", text=element_text(size=5), rect = element_rect(linewidth = 0.1), line = element_line(linewidth = 0.1))
+ggsave("Ext_int_similarity.pdf", height=3, width=2)
+
+sims$mgCST<-gsub("mgCST ", "", sims$mgCST)
+sims$mgCST<-factor(sims$mgCST, levels=c(1:27))
+cols<-mgCST[match(unique(sort(sims$mgCST)), mgCST$mgCST), "color"]
+ggplot(sims, aes(x=mgCST, fill=mgCST))+geom_bar()+theme_bw()+facet_wrap(~type, ncol = 1, scales="free_y")+scale_fill_manual(values=mgCST$color)+ylab("Number of Samples")+theme(legend.position = "none", text=element_text(size=5), rect = element_rect(linewidth = 0.1), line = element_line(linewidth = 0.1))
+ggsave("Ext_int_mgCSTs.pdf", height=3, width=4)
+
+ggplot(sims, aes(x=mgCST, y=`Similarity to assigned mgCST`))+geom_boxplot(fill="gray", outlier.size=0.1)+theme_bw()+facet_wrap(~type, ncol = 1, scales="free_y")+ylab("Similarity to assigned mgCST")+theme(legend.position = "none", text=element_text(size=5), rect = element_rect(linewidth = 0.1), line = element_line(linewidth = 0.1))
+ggsave("Ext_int_mgCSTs_sim_boxplot.pdf", height=3, width=4)
+```
+
+### Nearest Centroid vs HC assignment comparison
+```{r}
+mgcst.class<-read.csv("RDS_files/mgCSTs_15May2023.csv")
+names(mgcst.class)<-c("sampleID", "Nearest Centroid Assigned mgCST")
+mgcst.class$`Nearest Centroid Assigned mgCST`<-gsub("mgCST ", "", mgcst.class$`Nearest Centroid Assigned mgCST`)
+mgcst.train<-read.csv("RDS_files/mgCST_Training.csv")
+names(mgcst.train)[5]<-"HC Assigned mgCST"
+mgcst.comp<-merge(mgcst.class, mgcst.train[,c("sampleID", "HC Assigned mgCST")], all=TRUE)
+mgcst.comp$`Nearest Centroid Assigned mgCST`<-factor(mgcst.comp$`Nearest Centroid Assigned mgCST`, levels=unique(sort(as.numeric(mgcst.comp$`Nearest Centroid Assigned mgCST`))))
+mgcst.comp$`HC Assigned mgCST`<-factor(mgcst.comp$`HC Assigned mgCST`, levels=unique(sort(as.numeric(mgcst.comp$`HC Assigned mgCST`))))
+v<-round(prop.table(table(mgcst.comp$`Nearest Centroid Assigned mgCST`, mgcst.comp$`HC Assigned mgCST`), 2), 2)
+loadfonts(quiet = T)
+t<-as.data.frame(table(mgcst.comp$`Nearest Centroid Assigned mgCST`, mgcst.comp$`HC Assigned mgCST`))
+t$Var1<-factor(t$Var1, levels=unique(sort(as.numeric(t$Var1))))
+t$Var2<-factor(t$Var2, levels=unique(sort(as.numeric(t$Var2))))
+mgcst.cols<-mgCST[match(sort(unique(c(t$Var1, t$Var2))), mgCST$mgCST), "color"]
+tiff("Supplemental_Figure_HC_to_YC.tiff", width = 7, height = 7, units = "in", res = 300)
+  ggballoonplot(t, fill="Var2", size.range = c(0,9))+scale_fill_manual(values = rev(mgcst.cols))+theme_bw()+xlab("HC Assigned mgCST")+ylab("Nearest Centroid Assigned mgCST")+theme(text=element_text(family="Myriad Pro"))+labs(size = "No. Samples")+ guides(fill = "none")
+dev.off()
+
+s<-t[t$Var1 == t$Var2, ]
+
+l<-as.data.frame(kappam.fleiss(mgcst.comp[!is.na(mgcst.comp$`HC Assigned mgCST`),2:3], detail = TRUE)[["detail"]])
+l<-l[l$Var2 %in% "Kappa", ]
+l$Var2<-NULL
+names(l)[2]<-c("kappa")
+l$Var1<-factor(l$Var1, levels=unique(sort(as.numeric(l$Var1))))
+v<-merge(t, l)
+naming<-unique(paste(v$Var1, ", k=", round(v$kappa,2), sep=""))
+naming<-factor(naming, levels=naming[c(1,20:27, 2:19)])
+tiff("Supplemental_Figure_HC_to_YC.tiff", width = 7, height = 7, units = "in", res = 300)
+  ggballoonplot(v, fill="Var2", size.range = c(0,9))+scale_fill_manual(values = rev(mgcst.cols))+theme_bw()+xlab("HC Assigned mgCST")+ylab("Nearest Centroid Assigned mgCST")+theme(text=element_text(family="Myriad Pro"))+labs(size = "No. Samples")+ guides(fill = "none")+scale_y_discrete(labels=rev(naming[c(1,12,21:27, 2:11, 13:20)]))
+dev.off()
+```
+
+### RF vs HC Assignment comparison
+```{r}
+mgss.class<-read.csv("RDS_files/relabund_w_mgCSTs_15May2023.csv")
+species<-names(mgss.classifier)
+species<-gsub("BVAB1", "Ca._Lachnocurva_vaginae", species)
+
+mgss<-data.frame()
+for(i in species){
+  mgss<-rbind(mgss, cbind(Species=i, `RF Assigned mgSs`=names(mgss.class)[grepl(pattern = i, names(mgss.class))]))
+}
+mgss.class.m<-melt(mgss.class[,c("X", mgss$`RF Assigned mgSs`)], id.vars="X", variable.name="RF Assigned mgSs", value.name = "relabund")
+mgss.class.m<-mgss.class.m[mgss.class.m$relabund> 0, ]
+names(mgss.class.m)[1]<-"sampleID"
+mgss.class.m<-merge(mgss.class.m, mgss, all.x=TRUE)
+
+samples.clusters.df<-rbindlist(samples.clusters, idcol = T)
+samples.clusters.df$`HC Assigned mgSs`<-paste(samples.clusters.df$.id, samples.clusters.df$sample_cluster, sep="_")
+names(samples.clusters.df)[c(1,3)]<-c("Species", "HC cluster")
+mgss.comp<-merge(mgss.class.m, samples.clusters.df, all=TRUE)
+mgss.comp<-mgss.comp[complete.cases(mgss.comp), ]
+  
+v<-round(prop.table(table(mgss.comp$`RF Assigned mgSs`, mgss.comp$`HC Assigned mgSs`), 2), 2)
+loadfonts(quiet = T)
+t<-as.data.frame(table(mgss.comp$`RF Assigned mgSs`, mgss.comp$`HC Assigned mgSs`))
+t$Species<-mgss[match(t$Var1, mgss$`RF Assigned mgSs`), "Species"]
+t$Var1<-ifelse(str_count(t$Var1, "_") == 3, str_split_fixed(t$Var1, "_", 4)[,4], ifelse(str_count(t$Var1, "_") == 3, str_split_fixed(t$Var1, "_", 3)[,3], str_split_fixed(t$Var1, "_", 3)[,3]))
+t$Var2<-ifelse(str_count(t$Var2, "_") == 3, str_split_fixed(t$Var2, "_", 4)[,4], ifelse(str_count(t$Var2, "_") == 3, str_split_fixed(t$Var2, "_", 3)[,3], str_split_fixed(t$Var2, "_", 3)[,3]))
+t$Var1<-factor(t$Var1, levels=unique(sort(as.numeric(t$Var1))))
+t$Var2<-factor(t$Var2, levels=unique(sort(as.numeric(t$Var2))))
+t<-t[t$Freq > 0, ]
+t<-t[complete.cases(t), ]
+#mgcst.cols<-mgCST[match(sort(unique(c(t$Var1, t$Var2))), mgCST$mgCST), "color"]
+tiff("Supplemental_Figure_HC_to_RF.tiff", width = 10, height = 7, units = "in", res = 300)
+  ggballoonplot(t, size.range = c(0,7))+theme_bw()+ylab("HC Assigned mgSs")+xlab("RF Assigned mgSs")+theme(text=element_text(family="Myriad Pro", size=8))+labs(size = "No. Samples")+ guides(fill = "none")+facet_wrap(~Species, scales="free")
+dev.off()
+
+mgss.k<-data.frame()
+for(i in unique(mgss.comp$Species)){
+  l<-as.data.frame(kappam.fleiss(mgss.comp[!is.na(mgss.comp$`HC Assigned mgSs`) & mgss.comp$Species %in% i ,c(3,6)], detail = TRUE)[["detail"]])
+  mgss.k<-rbind(mgss.k, cbind(Species=i, as.data.frame(kappam.fleiss(mgss.comp[!is.na(mgss.comp$`HC Assigned mgSs`) & mgss.comp$Species %in% i ,c(3,6)], detail = TRUE)[["detail"]])))
+}
+
+mean.k<-as.data.frame(mgss.k[mgss.k$Var2 %in% "Kappa", ] %>% group_by(Species) %>% summarise(mean(Freq), med=median(Freq)))
+
+t$medk<-mean.k[match(t$Species, mean.k$Species), "med"]
+t$species_k<-paste(gsub("_", " ", t$Species), "\nmedian k=", t$medk, sep="")
+
+tiff("Supplemental_Figure_HC_to_RF.tiff", width = 10, height = 7, units = "in", res = 300)
+  ggballoonplot(t, size.range = c(0,6))+theme_bw()+ylab("HC Assigned mgSs")+xlab("RF Assigned mgSs")+theme(text=element_text(family="Myriad Pro", size=6))+labs(size = "No. Samples")+ guides(fill = "none")+facet_wrap(~species_k, scales="free")
+dev.off()
+```
+
+
+
+# VALENCIA to mgCST
+VIRGO-TAX VALENCIA TO MGCST
+```{r mgCSTs vs VALENCIA CST}
+v<-round(prop.table(table(mgCSTs.samples.meta$CST_Valencia, mgCSTs.samples.meta$mgCST), 2), 2)
+
+loadfonts(quiet = T)
+t<-as.data.frame(table(mgCSTs.samples.meta$CST_Valencia, mgCSTs.samples.meta$mgCST))
+t$Var1<-gsub("IV-C0", "IV-C", t$Var1)
+mgCSTs<-as.vector(mgCST[match(unique(t$Var2), mgCST$mgCST), "color"])
+CSTs<-as.vector(CST[match(unique(t$Var1), CST$CST), "color"])
+tiff("Supplemental_Figure_1_VALENCIA.tiff", width = 7, height = 7, units = "in", res = 300)
+  ggballoonplot(t, fill="Var2", size.range = c(0,9))+scale_fill_manual(values = rev(mgCSTs), name="mgCST")+theme_bw()+xlab("VALENCIA CST")+ylab("mgCST")+theme(text=element_text(family="Myriad Pro"),axis.text.y = element_text(colour = rev(mgCSTs)), axis.text.x = element_text(colour = CSTs))+labs(size = "No. Samples")
+dev.off()
+```
+
+
+# mgCST Cluster stability (HC)
+```{r}
+require(fpc)
+relabund<-ngl.abund.clusters.cast/rowSums(ngl.abund.clusters.cast) ### Currently does not include reads from non-mgss species. How to add? 
+mgCST.dist<-philentropy::JSD(as.matrix(relabund))
+
+kbest.p<-27
+cboot.hclust <- clusterboot(mgCST.dist, B=100, clustermethod=hclustCBI,method="ward", k=kbest.p)
+boot<-as.data.frame(cbind(sampleID=rownames(relabund), boot_clust=cboot.hclust$result$partition))
+boot$sampleID<-rownames(boot)
+
+boot.stab<-as.data.frame(cbind(boot_clust=c(1:27), stab=cboot.hclust$bootmean))
+
+mgcst.comp$boot_clust<-boot[match(mgcst.comp$sampleID, boot$sampleID), "boot_clust"]
+mgcst.comp.df<-dcast(data = mgcst.comp[!is.na(mgcst.comp$`HC Assigned mgCST`), ], `HC Assigned mgCST`~boot_clust)
+mgcst.comp.df$match<-colnames(mgcst.comp.df[,2:28])[apply(mgcst.comp.df[,2:28],1,which.max)]
+mgcst.comp$boot_clust<-factor(mgcst.comp$boot_clust, levels=unique(mgcst.comp.df$match))
+ggplot(mgcst.comp[!is.na(mgcst.comp.df$match), ], aes(x=`Nearest Centroid Assigned mgCST`, y=boot_clust))+geom_count()
+
+boot.stab$`HC Assigned mgCST`<-mgcst.comp.df[match(boot.stab$boot_clust, mgcst.comp.df$match), "HC Assigned mgCST"]
+```
+
+# Table Subject Demographics
+```{r Table SAMPLE DEMOGRAPHICS}
+## Get the number of samplesand subjects in each demographic group (age, race, nugent, ph)
+## These numbers are smaller than is used in stats, because some subjects have multiple samples all with different mgCSTs. 
+
+mgCSTs.samples<-unique(mgCSTs.samples.meta[!is.na(mgCSTs.samples.meta$Race) ,c("UID", "SID", "Race", "Source Study")]) # 1441 samples
+mgCSTs.subjects<-unique(mgCSTs.samples[ ,c("SID", "Race")])
+race.samples<-as.data.frame(mgCSTs.samples %>% count(Race) %>% mutate(perc=round(prop.table(n)*100, 2)))
+race.subjects<-as.data.frame(mgCSTs.subjects %>% count(Race) %>% mutate(perc=round(prop.table(n)*100, 2)))
+
+mgCSTs.samples<-unique(mgCSTs.samples.meta[!is.na(mgCSTs.samples.meta$Age_cat) ,c("UID", "SID", "Age_cat", "Source Study")]) # 1441 samples
+mgCSTs.subjects<-unique(mgCSTs.samples[ ,c("SID", "Age_cat")])
+age.samples<-as.data.frame(mgCSTs.samples %>% count(Age_cat) %>% mutate(perc=round(prop.table(n)*100, 2)))
+age.subjects<-as.data.frame(mgCSTs.subjects %>% count(Age_cat) %>% mutate(perc=round(prop.table(n)*100, 2)))
+
+mgCSTs.samples<-unique(mgCSTs.samples.meta[!is.na(mgCSTs.samples.meta$`Source Study`) ,c("UID", "SID", "Source Study")]) # 1441 samples
+mgCSTs.subjects<-unique(mgCSTs.samples[ ,c("SID", "Source Study")])
+study.samples<-as.data.frame(mgCSTs.samples %>% count(`Source Study`) %>% mutate(perc=round(prop.table(n)*100, 2)))
+study.subjects<-as.data.frame(mgCSTs.subjects %>% count(`Source Study`) %>% mutate(perc=round(prop.table(n)*100, 2)))
+## Fill in table manually. 
+
+mgCSTs.samples<-unique(mgCSTs.samples.meta[!is.na(mgCSTs.samples.meta$Age_cat) ,c("UID", "SID", "Nugent_cat", "Source Study")]) # 1441 samples
+mgCSTs.subjects<-unique(mgCSTs.samples[ ,c("SID", "Nugent_cat")])
+nug.samples<-as.data.frame(mgCSTs.samples %>% count(Nugent_cat) %>% mutate(perc=round(prop.table(n)*100, 2)))
+nug.subjects<-as.data.frame(mgCSTs.subjects %>% count(Nugent_cat) %>% mutate(perc=round(prop.table(n)*100, 2)))
+
+mgCSTs.samples<-unique(mgCSTs.samples.meta[!is.na(mgCSTs.samples.meta$pH_cat) ,c("UID", "SID", "pH_cat", "Source Study")]) # 1441 samples
+mgCSTs.samples$ph_bin<-ifelse(mgCSTs.samples$pH_cat %in% c("(4.4,5]", "(5,6]", "(6,7]"), 1, 0)
+mgCSTs.subjects<-unique(mgCSTs.samples[ ,c("SID", "ph_bin")])
+pH.samples<-as.data.frame(mgCSTs.samples %>% count(ph_bin) %>% mutate(perc=round(prop.table(n)*100, 2)))
+pH.subjects<-as.data.frame(mgCSTs.subjects %>% count(ph_bin) %>% mutate(perc=round(prop.table(n)*100, 2)))
+
+mgCSTs.samples<-unique(mgCSTs.samples.meta[!is.na(mgCSTs.samples.meta$`Amsel-BV`) ,c("UID", "SID", "Amsel-BV", "Source Study")]) # 1441 samples
+mgCSTs.subjects<-unique(mgCSTs.samples[ ,c("SID", "Amsel-BV", "Source Study")])
+ams.samples<-as.data.frame(mgCSTs.samples %>% count(`Amsel-BV`) %>% mutate(perc=round(prop.table(n)*100, 2)))
+ams.subjects<-as.data.frame(mgCSTs.subjects %>% count(`Amsel-BV`) %>% mutate(perc=round(prop.table(n)*100, 2)))
+
+mgCSTs.samples<-unique(mgCSTs.samples.meta[!is.na(mgCSTs.samples.meta$`Sym-Amsel-BV`) ,c("UID", "SID", "Sym-Amsel-BV", "Source Study")]) # 1441 samples
+mgCSTs.subjects<-unique(mgCSTs.samples[ ,c("SID", "Sym-Amsel-BV")])
+sym.samples<-as.data.frame(mgCSTs.samples %>% count(`Sym-Amsel-BV`) %>% mutate(perc=round(prop.table(n)*100, 2)))
+sym.subjects<-as.data.frame(mgCSTs.subjects %>% count(`Sym-Amsel-BV`) %>% mutate(perc=round(prop.table(n)*100, 2)))
+
+```
+
+# mgSs presence/absence heatmaps
+```{r}
+library(vegan)
+mgss.classifier<-readRDS("RDS_files/mgss_classifier.RDS")
+names(mgss.classifier)[5]<-"BVAB1"
+
+## Condense BVAB1 clusters to 3. 
+i<-"BVAB1"
+samples.clusters[[i]]$sample_cluster<-gsub("3", "2", samples.clusters[[i]]$sample_cluster)
+samples.clusters[[i]]$sample_cluster<-gsub("4", "3", samples.clusters[[i]]$sample_cluster)
+samples.clusters[[i]]$sample_cluster<-gsub("5", "3", samples.clusters[[i]]$sample_cluster)
+samples.clusters[[i]]$sample_cluster<-gsub("6", "3", samples.clusters[[i]]$sample_cluster)
+
+f = gplots:::heatmap.2
+## dend row margins
+body(f)[[79]][["lwd"]]<-0.0001
+body(f)[[79]][["cex"]]<-0.2
+body(f)[[79]][[2]][[2]]<-7
+body(f)[[79]][[2]][[3]]<-7
+body(f)[[80]][[3]][[2]][[3]][[2]][[4]]<-TRUE
+
+## dend col margins
+body(f)[[81]][["lwd"]]<-0.0001
+body(f)[[81]][["cex"]]<-0.2
+
+body(f)[[82]][[3]][[2]][[3]][[2]][[3]]<-TRUE
+#for(i in names(ngl.gene.counts.list.mgSs.pa.clean)[c(1:6,8:26,28:33)]){
+#for(i in names(ngl.gene.counts.list.mgSs.pa.clean)[c(1:6,8:26, 28:33)]){ ## Rowv=set(as.dendrogram(genes.hc[[i]]), "branches_lwd", 0.5)
+for(i in names(ngl.gene.counts.list.mgSs.pa.clean)[c(7,27)]){ ## Rowv=as.dendrogram(genes.hc[[i]])
+  x<-ngl.gene.counts.list.mgSs.pa.clean[[i]]
+  
+  tab<-as.data.frame(cbind(bv.sym=mgCSTs.samples.meta[match(colnames(x), mgCSTs.samples.meta$UID), "Sym-Amsel-BV"], bv=mgCSTs.samples.meta[match(colnames(x), mgCSTs.samples.meta$UID), "Amsel-BV"], UID=colnames(x), mgCST=mgCSTs.samples.meta[match(colnames(x), mgCSTs.samples.meta$UID), "mgCST"], mgSs=samples.clusters[[i]][match(colnames(x), samples.clusters[[i]]$sampleID), "sample_cluster"]))
+  tab$bv.sym[is.na(tab$bv.sym)]<-"Not Evaluated (blank)"
+  tab$bv.sym[tab$bv.sym %in% "clinBV.asymp"]<-"Asym Amsel-BV"
+  tab$bv.sym[tab$bv.sym %in% "clinBV.symp"]<-"Sym Amsel-BV"
+  tab$bv.sym[tab$bv.sym %in% "noBV"]<-"Amsel-BV (-)"
+  tab$bv.sym<-factor(tab$bv.sym, levels=c("Asym Amsel-BV", "Sym Amsel-BV", "Amsel-BV (-)", "Not Evaluated (blank)"))
+  tab$mgSs<-factor(tab$mgSs, levels=c(1:max(as.numeric(tab$mgSs))))
+  #tab<-merge(tab, as.data.frame(cbind(mgSs=colnames(mgss.classifier[[i]]$err.rate)[2:ncol(mgss.classifier[[i]]$err.rate)], err=round(tail(mgss.classifier[[i]]$err.rate, n=1)[2:ncol(mgss.classifier[[i]]$err.rate)], 3)*100)))
+  #tab$mgSs<-paste("mgSs ", tab$mgSs, ", Classification Error: ", tab$err, "%", sep="")
+  
+  main<-paste(gsub("_", " ", i), paste(" mgSs\nNumber of Samples=", paste(ncol(x)), paste(", Number of Genes=", paste(nrow(x), sep=""), sep=""), sep=""), sep="")
+  cols<-c(RColorBrewer::brewer.pal(9, "Set1"), RColorBrewer::brewer.pal(3, "Paired"))
+  colTbl1<-c(RColorBrewer::brewer.pal(12, "Set3"))
+  colTbl2<-c("black", "red", "gray", "white")
+  colfunc <- colorRampPalette(c("antiquewhite", "mediumblue"))
+  labs<-rep("|", length(colnames(x)))
+  a<-ifelse(length(unique(tab$mgSs)) > 4, 2, 1)
+
+  png(paste("RDS_files/mgSs_heatmaps/",i, "_subspecies_heatmap_gg_", today2, ".png", sep=""), width=3, height=3, bg="transparent", units="in", res=1200)
+  par(cex.main=1)
+  f(as.matrix(x), 
+                    Colv= set(as.dendrogram(samples.hc[[i]]), "branches_lwd", 0.5),
+    #Rowv = set(as.dendrogram(genes.hc[[i]]), "branches_lwd", 0.5),
+    Rowv=as.dendrogram(genes.hc[[i]]), ## why doesn't dend draw for p. disiens only?
+                    col=colfunc(2), 
+                    labRow = FALSE, 
+                    labCol = labs,
+                    srtCol = 0,
+                    key = FALSE, 
+                    trace="none", 
+                    main = main,
+                    RowSideColors = cols[as.factor(as.numeric(genes.clusters[[i]]$gene_cluster))], 
+                    ColSideColors = colTbl1[as.factor(tab[match(colnames(x), tab$UID), "mgSs"])], 
+                    margins = c(2, 0.1), 
+                    cexCol = 0.7, 
+                    colCol = colTbl2[as.factor(tab[match(colnames(x), tab$UID), "bv.sym"])], 
+                    offsetCol=-0.5,
+                    adjCol = c(NA,1)
+    )
+  legend(xpd = TRUE, x=1.1, y=1.55, legend = paste("mgSs ", as.factor(sort(unique(tab[match(colnames(x), tab$UID), "mgSs"]))), sep=""), col = colTbl1[as.factor(sort(unique(tab[match(colnames(x), tab$UID), "mgSs"])))], lty = 1, lwd = 1, cex=.15, bty="n", ncol=1)
+
+  legend(xpd = TRUE, x=0.02, y=-0.75, legend=c("Asym Amsel-BV", "Sym Amsel-BV", "Amsel-BV (-)", "Not Evaluated (blank)"),pch=NA, text.col = colTbl2, cex=.15, bty="n", adj=c(0,1), ncol=2)
+  
+  legend(xpd = TRUE, x=-0.2, y=1.1, legend = as.factor(sort(unique(as.numeric(genes.clusters[[i]]$gene_cluster)))), col = cols[as.factor(sort(unique(as.numeric(genes.clusters[[i]]$gene_cluster))))], lty = 1, lwd = 1, cex=.15, bty="n", title = "Gene Clusters", ncol = 2)
+  dev.off()
+}
+```
+
+# pH, Nugent, Race, Age mgCST summary stats and plots
+```{r pH, Nugent, Race, Age mgCST Maentel Haenztel test}
+## Account for cohorts using Maentel Haenztel test
+# mantelhaen.test()
+# set up data properly (margin.table) 
+# x=mgCST, y=race, z=Source Study
+
+mgCSTs.samples.meta$mgCST<-factor(mgCSTs.samples.meta$mgCST, levels = sort(unique(as.numeric(mgCSTs.samples.meta$mgCST))))
+race<-unique(mgCSTs.samples.meta[!is.na(mgCSTs.samples.meta$Race), c("Race", "mgCST", "Source Study", "SID")])
+#race<-race[!race$SID %in% names(table(race$SID))[table(race$SID) > 1], ]
+## The MH test says: chi-sq test 
+rm(race.stat)
+for(n in c(1:17, 19:27)){ ## 18 is only in LSVF
+  x<-race
+  x$mgCST_cat<-ifelse(x$mgCST == n, n, 0)
+  full_tables<-table(x[, c(1, 5, 3)])
+  partial_tables<-margin.table(full_tables, c(1,2,3))
+  marginal_table<-margin.table(full_tables, c(1,2))
+  summary(m<-mantelhaen.test(partial_tables))
+  tab <- cbind(mgCST=n, X2 = as.data.frame(m["statistic"]), p = as.data.frame(m["p.value"]), test="MH")
+rownames(tab)<-tab["mgCST"]
+if (exists("race.stat")){
+  race.stat<-as.data.frame(merge(race.stat, tab, all=TRUE))
+  }else{
+  race.stat<-tab
+  }
+}
+x<-race
+x$mgCST_cat<-ifelse(x$mgCST == 18, 18, 0)
+m<-chisq.test(x = prop.table(table(x$Race, x$mgCST_cat), 2)[,2], p = prop.table(table(x$Race)))
+race.stat<-as.data.frame(merge(race.stat, cbind(mgCST=18, X2 = as.data.frame(m["statistic"]), p = as.data.frame(m["p.value"]), test="Chi-sq"), all=TRUE))
+
+write.csv(race.stat, "Race_MH_stats.csv", row.names = FALSE, quote=FALSE)
+
+age<-unique(mgCSTs.samples.meta[!is.na(mgCSTs.samples.meta$Age_cat), c("Age_cat", "mgCST", "Source Study", "SID")])
+#age<-age[!age$SID %in% names(table(age$SID))[table(age$SID) > 1], ]
+rm(age.stat)
+for(n in c(1:27)){ 
+  x<-age
+  x$mgCST_cat<-ifelse(x$mgCST == n, n, 0)
+  full_tables<-table(x[, c(1, 5, 3)])
+  partial_tables<-margin.table(full_tables, c(1,2,3))
+  marginal_table<-margin.table(full_tables, c(1,2))
+  summary(m<-mantelhaen.test(partial_tables))
+  tab <- cbind(mgCST=n, X2 = as.data.frame(m["statistic"]), p = as.data.frame(m["p.value"]), test="MH")
+rownames(tab)<-tab["mgCST"]
+if (exists("age.stat")){
+  age.stat<-as.data.frame(merge(age.stat, tab, all=TRUE))
+  }else{
+  age.stat<-tab
+  }
+}
+write.csv(age.stat, "age_MH_stats.csv", row.names = FALSE, quote=FALSE)
+
+nug<-unique(mgCSTs.samples.meta[!is.na(mgCSTs.samples.meta$Nugent_cat), c("Nugent_cat", "mgCST", "Source Study", "SID")])
+nug[nug$Nugent_cat %in% "10-Jul", "Nugent_cat"]<-"7-10"
+nug[nug$Nugent_cat %in% "6-Apr", "Nugent_cat"]<-"4-6"
+rm(nug.stat)
+for(n in c(1:27)){ 
+  x<-nug
+  x$mgCST_cat<-ifelse(x$mgCST == n, n, 0)
+  full_tables<-table(x[, c(1, 5, 3)])
+  partial_tables<-margin.table(full_tables, c(1,2,3))
+  marginal_table<-margin.table(full_tables, c(1,2))
+  summary(m<-mantelhaen.test(partial_tables))
+  tab <- cbind(mgCST=n, X2 = as.data.frame(m["statistic"]), p = as.data.frame(m["p.value"]), test="MH")
+rownames(tab)<-tab["mgCST"]
+if (exists("nug.stat")){
+  nug.stat<-as.data.frame(merge(nug.stat, tab, all=TRUE))
+  }else{
+  nug.stat<-tab
+  }
+}
+write.csv(nug.stat, "Nugent_MH_stats.csv", row.names = FALSE, quote=FALSE)
+
+ph<-unique(mgCSTs.samples.meta[!is.na(mgCSTs.samples.meta$pH_cat), c("pH_cat", "mgCST", "Source Study", "SID")])
+rm(ph.stat)
+for(n in c(1:27)){ 
+  x<-ph
+  x$mgCST_cat<-ifelse(x$mgCST == n, n, 0)
+  full_tables<-table(x[, c(1, 5, 3)])
+  partial_tables<-margin.table(full_tables, c(1,2,3))
+  marginal_table<-margin.table(full_tables, c(1,2))
+  summary(m<-mantelhaen.test(partial_tables))
+  tab <- cbind(mgCST=n, X2 = as.data.frame(m["statistic"]), p = as.data.frame(m["p.value"]), test="MH")
+rownames(tab)<-tab["mgCST"]
+if (exists("ph.stat")){
+  ph.stat<-as.data.frame(merge(ph.stat, tab, all=TRUE))
+  }else{
+  ph.stat<-tab
+  }
+}
+write.csv(ph.stat, "pH_MH_stats.csv", row.names = FALSE, quote=FALSE)
+```
+
+# Amsel-BV
+```{r}
+## finally - clean up set to be fair for stats.. i.e. subject level - if subject has multiple mgCSTs, include the samples for each mgcst (1 per mgCST) 
+bv<-unique(mgCSTs.samples.meta[!is.na(mgCSTs.samples.meta$`Amsel-BV`), c("Amsel-BV", "mgCST", "SID", "Sym-Amsel-BV")])
+prop.table(table(bv$`Amsel-BV`))
+
+mgCSTs.samples.meta$mgCST<-factor(mgCSTs.samples.meta$mgCST, levels = sort(unique(as.numeric(mgCSTs.samples.meta$mgCST))))
+Amsel.BV<-unique(mgCSTs.samples.meta[!is.na(mgCSTs.samples.meta$`Amsel-BV`), c("Amsel-BV", "mgCST", "Source Study", "SID")])
+#race<-race[!race$SID %in% names(table(race$SID))[table(race$SID) > 1], ]
+rm(bv.stat)
+for(n in c(1:3, 5:13, 15:27)){ 
+  x<-Amsel.BV
+  x$mgCST_cat<-ifelse(x$mgCST == n, n, 0)
+  full_tables<-table(x[, c(1, 5, 3)])
+  partial_tables<-margin.table(full_tables, c(1,2,3))
+  marginal_table<-margin.table(full_tables, c(1,2))
+  summary(m<-mantelhaen.test(partial_tables))
+  tab <- cbind(mgCST=n, X2 = as.data.frame(m["statistic"]), p = as.data.frame(m["p.value"]), test="MH")
+rownames(tab)<-tab["mgCST"]
+if (exists("bv.stat")){
+  bv.stat<-as.data.frame(merge(bv.stat, tab, all=TRUE))
+  }else{
+  bv.stat<-tab
+  }
+}
+write.csv(bv.stat, "bv_MH_stats.csv", row.names = FALSE, quote=FALSE)
+
+## finally - clean up set to be fair for stats.. i.e. subject level - if subject has multiple mgCSTs, include the samples for each mgcst (1 per mgCST) 
+bv<-unique(mgCSTs.samples.meta[!is.na(mgCSTs.samples.meta$`Amsel-BV`), c("Amsel-BV", "mgCST", "SID", "Sym-Amsel-BV")])
+prop.table(table(bv$`Amsel-BV`))
+
+symAmsel.BV<-unique(mgCSTs.samples.meta[!is.na(mgCSTs.samples.meta$`Sym-Amsel-BV`) & !mgCSTs.samples.meta$`Sym-Amsel-BV` %in% "noBV", c("Sym-Amsel-BV", "mgCST", "Source Study", "SID")])
+rm(bv.stat)
+for(n in c(10:13, 17:25, 27)){ 
+  x<-symAmsel.BV
+  x$mgCST_cat<-ifelse(x$mgCST == n, n, 0)
+  full_tables<-table(x[, c(1, 5, 3)])
+  partial_tables<-margin.table(full_tables, c(1,2,3))
+  marginal_table<-margin.table(full_tables, c(1,2))
+  summary(m<-mantelhaen.test(partial_tables))
+  tab <- cbind(mgCST=n, X2 = as.data.frame(m["statistic"]), p = as.data.frame(m["p.value"]), test="MH")
+rownames(tab)<-tab["mgCST"]
+if (exists("bv.stat")){
+  bv.stat<-as.data.frame(merge(bv.stat, tab, all=TRUE))
+  }else{
+  bv.stat<-tab
+  }
+}
+write.csv(bv.stat, "symbv_MH_stats.csv", row.names = FALSE, quote=FALSE)
+```
+
+## Plot Race
+```{r Plot Race}
+ethn.col.Tbl<-RColorBrewer::brewer.pal(length(sort(unique(mgCSTs.samples.meta$Race))),"Set1")
+ggplot(race, aes(x=factor(mgCST), fill=Race))+geom_bar()+scale_fill_manual(values=rev(ethn.col.Tbl),name="")+theme_classic()+ylab("Number of Participants")+xlab("mgCST")+theme(text = element_text(size = 8), legend.position = "top", axis.text.y = element_text(colour = rev(c("black", as.vector(mgCST$color[1:27])))))+coord_flip()+scale_x_discrete(limits = rev)
+ggsave("Prop_Race_mgCST.pdf", height=5, width=3)
+
+race$studywide<-"Study-Wide"
+ggplot(race, aes(x=studywide, y=mgCST, fill=Race))+geom_bar(stat="identity", position="fill")+theme_classic()+ylab("Number of Participants")+xlab("mgCST")+theme(text = element_text(size = 6), legend.position = "none")+coord_flip()+scale_fill_manual(values=rev(ethn.col.Tbl),name="")
+ggsave("Race_exp_mgCST.pdf", height=1, width=3)
+```
+
+## Plot Age
+```{r Plot Age}
+ggplot(age, aes(x=factor(mgCST), fill=forcats::fct_rev(Age_cat)))+geom_bar()+scale_fill_viridis_d(name = "")+theme_classic()+ylab("Number of Participants")+xlab("mgCST")+theme(text = element_text(size = 8), legend.position = "top", axis.text.y = element_text(colour = rev(c("black", as.vector(mgCST$color[1:27])))))+coord_flip()+scale_x_discrete(limits = rev)
+ggsave("Prop_age_mgCST.pdf", height=5, width=3)
+
+age$studywide<-"Study-Wide"
+ggplot(age, aes(x=studywide, y=mgCST, fill=forcats::fct_rev(Age_cat)))+geom_bar(stat="identity", position="fill")+theme_classic()+ylab("Number of Participants")+xlab("mgCST")+theme(text = element_text(size = 6), legend.position = "none")+coord_flip()+scale_fill_viridis_d(name = "")
+ggsave("Age_exp_mgCST.pdf", height=1, width=3)
+```
+
+## Plot pH
+```{r Plot pH}
+ggplot(ph, aes(x=factor(mgCST), fill=pH_cat))+geom_bar()+scale_fill_viridis_d(name = "")+theme_classic()+ylab("Number of Participants")+xlab("mgCST")+theme(text = element_text(size = 8), legend.position = "top", axis.text.y = element_text(colour = rev(c("black", as.vector(mgCST$color[1:27])))))+coord_flip()+scale_x_discrete(limits = rev)
+ggsave("Prop_ph_mgCST.pdf", height=5, width=3)
+
+ph$studywide<-"Study-Wide"
+ggplot(ph, aes(x=studywide, y=mgCST, fill=pH_cat))+geom_bar(stat="identity", position="fill")+theme_classic()+ylab("Number of Participants")+xlab("mgCST")+theme(text = element_text(size = 6), legend.position = "top")+coord_flip()+scale_fill_viridis_d(name = "")
+ggsave("ph_exp_mgCST.pdf", height=1, width=3)
+```
+
+## Plot Nugent
+```{r Plot Nugent}
+ggplot(nug, aes(x=factor(mgCST), fill=forcats::fct_rev(Nugent_cat)))+geom_bar()+scale_fill_viridis_d(name = "")+theme_classic()+ylab("Number of Participants")+xlab("mgCST")+theme(text = element_text(size = 8), legend.position = "top", axis.text.y = element_text(colour = rev(c("black", as.vector(mgCST$color[1:27])))))+coord_flip()+scale_x_discrete(limits = rev)
+ggsave("Prop_nug_mgCST.pdf", height=5, width=3)
+
+x$studywide<-"Study-Wide"
+ggplot(nug, aes(x=studywide, y=mgCST, fill=forcats::fct_rev(Nugent_cat)))+geom_bar(stat="identity", position="fill")+theme_classic()+ylab("Number of Participants")+xlab("mgCST")+theme(text = element_text(size = 6), legend.position = "top")+coord_flip()+scale_fill_viridis_d(name = "")
+ggsave("nug_exp_mgCST.pdf", height=1, width=3)
+```
+
+## Plot Stability
+```{r}
+hmp<-read.csv("UMB-HMP_stability_mensesCensored.csv", header=T)
+hmp.mgcst<-unique(merge(hmp, unique(mgCSTs.samples.meta[,c("UID", "SID", "mgCST")])))
+hmp.mgcst$time<-ifelse(nchar(hmp.mgcst$UID) < 15, str_split_fixed(hmp.mgcst$UID, "_", n=2)[,2], str_split_fixed(hmp.mgcst$UID, "_", n=4)[,3]) 
+hmp.mgcst$time2<-ifelse(grepl("W10", hmp.mgcst$time),  as.character(hmp.mgcst$time), gsub("W", "W0", hmp.mgcst$time))
+hmp.mgcst$mgCST<-factor(hmp.mgcst$mgCST, levels=c(1:27))
+hmp.mgcst$Stability_cat<-factor(ifelse(hmp.mgcst$Stability < 0.5, "low", ifelse(hmp.mgcst$Stability > 0.7, "high", "med")), levels=c("low", "med", "high"))
+hmp.mgcst.uniq<-unique(hmp.mgcst[,c("SID", "mgCST", "Stability_cat")])
+ggplot(hmp.mgcst, aes(y=reorder(SID, Stability), x=time2, color=mgCST))+geom_point()+scale_color_manual(values=mgCST$color)+theme(axis.text.x = element_text(angle=90, hjust=1))+facet_wrap(~Stability_cat, ncol=1, scales="free_y")
+```
+
+
+## Plot Amsel-BV
+```{r Plot clin BV}
+## FIGURES
+## add in some more color - black for the BV- and the BV+ should be mgCST color, and keep the gray on the bottom.
+## BV vs. NoBV
+to.plot<-Amsel.BV
+to.plot$`Amsel-BV`<-ifelse(to.plot$`Amsel-BV` %in% "clinBV", to.plot$mgCST, " noBV")
+cols<-as.vector(mgCST[match(sort(unique(to.plot$mgCST)), mgCST$mgCST), "color"])
+cols[1]<-"black"
+ggplot(to.plot, aes(fill=`Amsel-BV`, x=factor(mgCST)))+geom_bar(color="black", width=0.6, size=0.1)+theme_classic()+theme(text = element_text(size=6),legend.background = element_blank(), legend.title = element_blank(), legend.position = "none", line = element_line(size=0.1))+scale_x_discrete(breaks = 1:27)+ylab("Number of Participants")+xlab("mgCST")+scale_fill_manual(values = cols)
+ggsave("BV_orNoBV_by_mgCST.pdf", height=3 , width=7)
+
+## symBV vs. asymBV
+to.plot<-symAmsel.BV
+to.plot<-to.plot[!to.plot$`Sym-Amsel-BV` %in% c("noBV"), ]
+ggplot(to.plot, aes(fill=`Sym-Amsel-BV`, x=factor(mgCST)))+geom_bar(color="black", width=0.6, size=0.1)+theme_classic()+theme(text = element_text(size=6),legend.background = element_blank(), legend.title = element_blank(), legend.position = c(0.1, 0.8), line=element_line(size=0.1))+scale_x_discrete(breaks = 1:27)+ylab("Number of Participants")+xlab("mgCST")+scale_fill_manual(values = c("grey63", "grey30"), labels=c("Asymptomatic BV", "Symptomatic BV"))+ylim(c(0,100))
+ggsave("symBV_or_asymBV_by_mgCST.pdf", height=3 , width=5)
+```
+
+
+## Stats Summary File
+```{r}
+
+a<-as.data.frame(cbind(`Study-Wide Prevalence (%)`=round(prop.table(table(race$Race)), 3)*100, Nsubjects=table(race$Race), cbind(round(prop.table(table(race$Race, race$mgCST), 2), 3)*100)))
+
+b<-as.data.frame(cbind(`Study-Wide Prevalence (%)`=round(prop.table(table(age$Age_cat)), 3)*100, Nsubjects=table(age$Age_cat), cbind(round(prop.table(table(age$Age_cat, age$mgCST), 2), 3)*100)))
+
+c<-as.data.frame(cbind(`Study-Wide Prevalence (%)`=round(prop.table(table(nug$Nugent_cat)), 3)*100, Nsubjects=table(nug$Nugent_cat), cbind(round(prop.table(table(nug$Nugent_cat, nug$mgCST), 2), 3)*100)))
+
+
+d<-as.data.frame(cbind(`Study-Wide Prevalence (%)`=round(prop.table(table(ph$pH_cat)), 3)*100, Nsubjects=table(ph$pH_cat), cbind(round(prop.table(table(ph$pH_cat, ph$mgCST), 2), 3)*100)))
+
+bv<-unique(mgCSTs.samples.meta[!is.na(mgCSTs.samples.meta$`Amsel-BV`), c("Amsel-BV", "mgCST", "SID")])
+bv.prop<-round(prop.table(table(bv$`Amsel-BV`)), 3)
+e<-as.data.frame(cbind(`Study-Wide Prevalence (%)`=round(bv.prop, 3)*100, Nsubjects=table(bv$`Amsel-BV`), cbind(round(prop.table(table(bv$`Amsel-BV`, bv$mgCST), 2), 3)*100)))
+
+symbv<-unique(mgCSTs.samples.meta[!is.na(mgCSTs.samples.meta$`Sym-Amsel-BV`) & !mgCSTs.samples.meta$`Sym-Amsel-BV` %in% "noBV", c("Sym-Amsel-BV", "mgCST", "SID")])
+symbv.prop<-round(prop.table(table(symbv$`Sym-Amsel-BV`)), 3)
+f<-as.data.frame(cbind(`Study-Wide Prevalence (%)`=round(symbv.prop, 3)*100, Nsubjects=table(symbv$`Sym-Amsel-BV`), cbind(round(prop.table(table(symbv$`Sym-Amsel-BV`, symbv$mgCST), 2), 3)*100)))
+
+write.csv(rbind(a,b,c,d,e,f), "stats_summary.csv", quote=F)
+```
+
+
+# Story 1: L.crispatus
+
+## Lc # Strains
+From M.france:
+just use this equation to back solve for number of strains 
+
+Y=2057N e0.14
+Y = number of L. crispatus VOGs detected
+N = number of strains 
+
+2839.45VOGs= 2057*(10Strains^0.14)
+2839.45/2057 = x^0.14
+1.380384 = x^0.14
+(2839.45/2057)^(1/0.14) = x
+Y = number of L. crispatus VOGs detected, N = number of strains 
+range: 500 VOGS = 5 strains, 3500 VOGs = 60 strains
+```{r Estimated number of Lc strains}
+require(dplyr)
+
+ngl.gene.counts.m$VOG<-all.clean.info.vog[match(ngl.gene.counts.m$VIRGO_ID,all.clean.info.vog$VIRGO_ID), "VOG"]
+ngl.gene.counts.m$VOG1<-ifelse(ngl.gene.counts.m$VOG %in% "singletons", as.character(ngl.gene.counts.m$VIRGO_ID), as.character(ngl.gene.counts.m$VOG))
+
+vogs.virgoid.per.sample<-as.data.frame(ngl.gene.counts.m %>% group_by(sampleID, Taxon) %>% summarize(nVOGs=length(unique(VOG1)), nVIRGO=length(unique(VIRGO_ID))))
+lc.vogs.virgoid.per.sample<-vogs.virgoid.per.sample[vogs.virgoid.per.sample$Taxon %in% "Lactobacillus_crispatus", ]
+lc.vogs.virgoid.per.sample<-merge(lc.vogs.virgoid.per.sample, mgCSTs.samples.meta[,c("UID", "mgCST")], all=TRUE, by.x="sampleID", by.y="UID")
+
+lc.vogs.virgoid.per.sample$nStrains<-(lc.vogs.virgoid.per.sample$nVOGs/2057)^(1/0.14)
+mgCSTs.samples.meta$`Number of L. crispatus VOGs`<-lc.vogs.virgoid.per.sample[match(mgCSTs.samples.meta$UID, lc.vogs.virgoid.per.sample$sampleID), "nVOGs"]
+mgCSTs.samples.meta$`Estimated Number of L. crispatus Strains`<-lc.vogs.virgoid.per.sample[match(mgCSTs.samples.meta$UID, lc.vogs.virgoid.per.sample$sampleID), "nStrains"]
+```
+
+
+Get mgSs per sample
+```{r}
+lc.mgss<-mgss.comp[mgss.comp$Species %in% "Lactobacillus_crispatus", c("sampleID", "RF Assigned mgSs")]
+lc.mgss$`Estimated Number of L. crispatus Strains`<-mgCSTs.samples.meta[match(lc.mgss$sampleID, mgCSTs.samples.meta$UID), "Estimated Number of L. crispatus Strains"]
+lc.mgss$pH_cat<-mgCSTs.samples.meta[match(lc.mgss$sampleID, mgCSTs.samples.meta$UID), "pH_cat"]
+lc.mgss$Shannon<-mgCSTs.samples.meta[match(lc.mgss$sampleID, mgCSTs.samples.meta$UID), "Shannon"]
+lc.mgss$mgSs<-str_split_fixed(lc.mgss$`RF Assigned mgSs`, "_", 3)[,3]
+lc.mgss$SID<-mgCSTs.samples.meta[match(lc.mgss$sampleID, mgCSTs.samples.meta$UID), "SID"]
+```
+
+
+## Lc D-LDH
+```{r}
+map<-as.data.frame(read_excel("../mg_sample_data_sources.xlsx"))
+
+x<-ngl.gene.counts.list.mgSs.pa.clean$Lactobacillus_crispatus
+dldh<-c("V1891370", "V1806611")
+x<-x[dldh, ]
+x$VIRGO_ID<-rownames(x)
+x.m<-melt(x, id.vars="VIRGO_ID", variable.name="UID", value.name = "pa")
+x.m$sampleID<-as.vector(map[match(x.m$UID, map$sampleID), "sampleID_2"])
+x.m$mgCST<-mgCSTs.samples.meta[match(x.m$sampleID, mgCSTs.samples.meta$UID), "mgCST"]
+x.m$mgCST<-ifelse(is.na(x.m$mgCST), mgCSTs.samples.meta[match(gsub("MG_", "", x.m$sampleID), mgCSTs.samples.meta$UID), "mgCST"], as.character(x.m$mgCST))
+```
+
+
+## Lc pH cat (barplot)
+```{r Vaginal pH by mgCST}
+ggplot(lc.mgss[!is.na(lc.mgss$pH_cat) & !lc.mgss$mgSs %in% "0", ], aes(x=factor(mgSs), fill=pH_cat))+geom_bar(stat="count")+ylab("Vaginal pH")+xlab("L. crispatus mgSs")+theme_bw()+theme(text = element_text(size=6))+scale_fill_viridis_d(name = "pH Category", direction = -1)
+ggsave("mgCSTs_pH_Lc.pdf", height=2, width=3)
+
+rm(ph.stat)
+for(n in c(1:6)){ ## 18 is only in LSVF
+  x<-lc.mgss
+  x$mgss_cat<-ifelse(x$mgSs == n, n, 0)
+  summary(m<-chisq.test(table(x$pH_cat, x$mgss_cat), p=c(0.407, 0.593)))
+  tab <- cbind(mgss=n, X2 = as.data.frame(m["statistic"]), p = as.data.frame(m["p.value"]), nSamples=nrow(x), propBV = as.vector(prop.table(table(x$pH_cat)))[1], prop_noBV = as.vector(prop.table(table(x$pH_cat)))[2],  test="X2")
+  tab <- cbind(mgSs=n, X2 = as.data.frame(m["statistic"]), p = as.data.frame(m["p.value"]), test="chisq")
+rownames(tab)<-tab["mgSs"]
+if (exists("ph.stat")){
+  ph.stat<-as.data.frame(merge(ph.stat, tab, all=TRUE))
+  }else{
+  ph.stat<-tab
+  }
+}
+```
+
+## Lc Stability (boxplot)
+```{r stability}
+
+hmp.stab<-read.csv("others/UMB-HMP_stability_mensesCensored.csv", header=T)
+#hmp.stab$mgSs<-lc.mgss[match(hmp.stab$SID, lc.mgss$SID), "mgSs"]
+#hmp.stab$mgCST<-mgCSTs.samples.meta[match(hmp.stab$SID, mgCSTs.samples.meta$SID), "mgCST"]
+
+mgCSTs.samples.meta$`Longitudinal Stability`<-hmp.stab[match(mgCSTs.samples.meta$SID, hmp.stab$SID), "Stability"]
+
+to.plot<-mgCSTs.samples.meta[!is.na(mgCSTs.samples.meta$`Longitudinal Stability`), ]
+to.plot$time<-ifelse(str_count(to.plot$UID, "_") == 1, str_split_fixed(to.plot$UID, "_", 2)[,2], str_split_fixed(to.plot$UID, "_", 3)[,2])
+to.plot$time<-factor(to.plot$time, levels=c(sort(unique(to.plot$time))[8:72], sort(unique(to.plot$time))[1:7]))
+to.plot$SID<-factor(to.plot$SID, levels=unique(to.plot$SID[order(to.plot$`Longitudinal Stability`)]))
+to.plot$mgCST<-factor(to.plot$mgCST)
+cols<-mgCST[match(sort(unique(to.plot$mgCST)), mgCST$mgCST), "color"]
+to.plot<-to.plot %>% group_by(SID) %>% mutate(id = row_number())
+to.plot<-to.plot %>% group_by(SID) %>% mutate(id = 1:n())
+to.plot<-to.plot %>% group_by(SID) %>% mutate(id = seq_len(n()))
+to.plot<-to.plot %>% group_by(SID) %>% mutate(id = seq_along(SID))
+to.plot$Lc_mgSs<-lc.mgss[match(to.plot$UID, lc.mgss$sampleID), "mgSs"]
+
+ggplot(to.plot, aes(y=SID, x=id, color=mgCST))+geom_point()+theme_bw()+theme(text=element_text(size=3), line = element_line(linewidth = 0.1), legend.position="none")+scale_color_manual(values=cols)
+ggsave("Lc_stability.pdf", height =5, width=3)
+
+my_comparisons <- list( c("1", "2"), c("1", "3"), c("2", "3") )
+ggplot(to.plot[to.plot$Lc_mgSs %in% c(1:3), ], aes(x=factor(Lc_mgSs), y=`Longitudinal Stability`, fill=factor(Lc_mgSs)))+geom_boxplot(outlier.shape = NA, lwd=0.2, notch = T, notchwidth = 0.2)+geom_jitter(size=0.05, width=0.2)+ylab("Stability Index")+xlab("mgSs")+theme_bw()+scale_fill_manual(values = mgCST$color[1:6])+stat_n_text(size = 1.5)+stat_compare_means(comparisons = my_comparisons)+stat_compare_means(label.y = 1.5)+theme(legend.position = "none", text = element_text(size=6))
+ggsave("Lc_stability.pdf", height =4, width=3)
+
+library(ggplot2)
+library(EnvStats)
+ggplot(to.plot, aes(x=factor(mgSs), y=Stability, fill=factor(mgSs)))+geom_boxplot(outlier.shape = NA, lwd=0.2, notch = T, notchwidth = 0.2)+geom_jitter(size=0.05, width=0.2)+ylab("Stability Index")+xlab("mgSs")+theme_bw()+scale_fill_manual(values = mgCST$color[1:6])+theme(legend.position = "none", text = element_text(size=6))+stat_n_text(size = 1.5)
+ggsave("Lc_mgCSTs_stability.pdf", height=2, width=3)
+```
+
+## Lc Shannon (boxplot)
+```{r}
+my_comparisons <- list( c("1", "2"), c("1", "3"), c("1", "4"), c("1", "5"), c("1", "6"),  c("2", "3"), c("2", "4"), c("2", "5"), c("2", "6"), c("3", "4"), c("3", "5"), c("3", "6"), c("4", "5"), c("4", "6"), c("5", "6")) 
+
+ggplot(lc.mgss, aes(x=factor(mgSs), y=Shannon, fill=factor(mgSs)))+geom_boxplot(outlier.shape = NA, lwd=0.2, notch = T, notchwidth = 0.2)+geom_jitter(size=0.05, width=0.2)+ylab("Stability Index")+xlab("mgCST")+theme_bw()+scale_fill_manual(values = mgCST$color[1:6])+theme(legend.position = "none", text = element_text(size=6))+stat_n_text(size = 1.5)+stat_compare_means(comparisons = my_comparisons)+stat_compare_means(label.y = 2, label = "p.signif")+theme(legend.position = "none", text = element_text(size=6))
+ggsave("Lc_mgSs_shannon.pdf", height=5, width=7)
+```
+
+## Lc Strains (boxplot)
+```{r}
+my_comparisons <- list( c("1", "2"), c("1", "3"), c("1", "4"), c("1", "5"), c("1", "6"),  c("2", "3"), c("2", "4"), c("2", "5"), c("2", "6"), c("3", "4"), c("3", "5"), c("3", "6"), c("4", "5"), c("4", "6"), c("5", "6")) 
+
+lc.mgss$`Estimated Number of Strains`<-mgCSTs.samples.meta[match(lc.mgss$sampleID, mgCSTs.samples.meta$UID), "Estimated Number of L. crispatus Strains"]
+ggplot(lc.mgss, aes(x=factor(mgSs), y=`Estimated Number of Strains`, fill=factor(mgSs)))+geom_boxplot(outlier.shape = NA, lwd=0.2, notch = T, notchwidth = 0.2)+geom_jitter(size=0.05, width=0.2)+ylab("Stability Index")+xlab("mgCST")+theme_bw()+scale_fill_manual(values = mgCST$color[1:6])+theme(legend.position = "none", text = element_text(size=6))+stat_n_text(size = 1.5)+stat_compare_means(comparisons = my_comparisons)+stat_compare_means(label.y = 2, label = "p.signif")+theme(legend.position = "none", text = element_text(size=6))
+ggsave("Lc_mgSs_nStrains_stats.pdf", height=5, width=7)
+
+ggplot(lc.mgss, aes(x=factor(mgSs), y=`Estimated Number of Strains`, fill=factor(mgSs)))+geom_boxplot(outlier.shape = NA, lwd=0.2, notch = T, notchwidth = 0.2)+geom_jitter(size=0.05, width=0.2)+ylab("Stability Index")+xlab("mgCST")+theme_bw()+scale_fill_manual(values = mgCST$color[1:6])+theme(legend.position = "none", text = element_text(size=6))+stat_n_text(size = 1.5)+theme(legend.position = "none", text = element_text(size=6))+ylim(c(0,30))
+ggsave("Lc_mgSs_nStrains.pdf", height=3, width=2)
+```
+
+# Story 2: Liners Figures
+## Li mgSs and BV (none, sym, and asym), Figures & stats
+```{r Amsel-Bv and liners mgSs}
+li<-ngl.abund.clusters.cast[, grepl("_iners_", colnames(ngl.abund.clusters.cast))]
+li$UID<-rownames(li)
+li.m<-melt(li, id.vars = "UID", variable.name = "mgSs", value.name = "nglCounts")
+li.m<-li.m[li.m$nglCounts > 0, ]
+li.m$mgSs<-gsub("Lactobacillus_iners_", "", li.m$mgSs)
+i<-"Lactobacillus_iners"
+tab<-as.data.frame(cbind(bv.sym=mgCSTs.samples.meta[match(li$UID, mgCSTs.samples.meta$UID), "Sym-Amsel-BV"], bv=mgCSTs.samples.meta[match(li$UID, mgCSTs.samples.meta$UID), "Amsel-BV"], UID=li$UID, mgCST=mgCSTs.samples.meta[match(li$UID, mgCSTs.samples.meta$UID), "mgCST"]))
+tab<-merge(tab, li.m, all=TRUE)
+tab<-tab[complete.cases(tab), ]
+   
+tab$mgss_plot<-ifelse(tab$bv == "clinBV", tab$mgSs, "noBV")
+tab$mgss_plot<-factor(tab$mgss_plot,  levels=c("0","1", "2", "3", "4", "5", "6", "noBV"), ordered = T)
+
+colTbl1<-c("gray", RColorBrewer::brewer.pal(6, "Set3"), "black")
+ggplot(tab[!is.na(tab$bv), ], aes(fill=mgss_plot, x=factor(mgSs)))+geom_bar(color="black", width=0.6, size=0.2)+theme_classic()+theme(text = element_text(size=6),legend.background = element_blank(), legend.title = element_blank(), legend.position = c(0.7, 0.9), line=element_line(size=0.1), legend.text = element_text(size=2))+ylab("Number of Participants with Lactobacillus iners")+xlab("Metagenomic Subspecies")+scale_fill_manual(values = colTbl1, labels=c("Amsel BV (-), Prevalence Among those with L. iners: 54.2%", "Amsel BV (+), Prevalence Among those with L. iners: 45.8%"))
+ggsave("Liners_mgSs_bv.pdf", height=3 , width=4)
+
+li.s<-tab
+rm(bvornot)
+for (n in unique(li.s$mgss)){
+  print(n)
+  test<-li.s[li.s$mgss == n & !is.na(li.s$bv), ]
+  summary(m<-chisq.test(table(test$bv, test$mgss), p=c(0.458, 0.542)))
+  tab <- cbind(mgCST=n, X2 = as.data.frame(m["statistic"]), p = as.data.frame(m["p.value"]), nSamples=nrow(test), propBV = as.vector(prop.table(table(test$bv)))[1], prop_noBV = as.vector(prop.table(table(test$bv)))[2],  test="X2")
+  rownames(tab)<-tab["mgCST"]
+  if (exists("bvornot")){
+    bvornot<-as.data.frame(merge(bvornot, tab, all=TRUE))
+    }else{
+    bvornot<-tab
+    }
+}
+
+round(prop.table(table(li.s[!li.s$`Amsel-BV`_sym %in% "noBV", "mgSs"], li.s[!li.s$mgSs %in% "Lactobacillus iners untyped" & !li.s$`Amsel-BV`_sym %in% "noBV", "`Amsel-BV`_sym"]), 1), 3)
+  #               Amsel-BV.asymp Sym-Amsel-BVp
+  # L. iners          0.828       0.172
+  # L. iners 1        0.825       0.175
+  # L. iners 2        0.923       0.077
+  # L. iners 3        1.000       0.000
+  # L. iners 4        0.890       0.110
+  # L. iners 5        0.917       0.083
+  # L. iners 6        1.000       0.000
+prop.table(table(li.s[!li.s$`Amsel-BV`_sym %in% "noBV", "`Amsel-BV`_sym"]))
+# Amsel-BV.asymp  Sym-Amsel-BVp 
+#    0.8798701    0.1201299
+ggplot(li.s[!li.s$`Amsel-BV`_sym %in% "noBV", ], aes(fill=`Amsel-BV`_sym, x=factor(mgSs)))+geom_bar(color="black", width=0.6, size=0.2)+theme_classic()+theme(text = element_text(size=6),legend.background = element_blank(), legend.title = element_blank(), legend.position = c(0.5, 0.9))+ylab("Number of Participants with Lactobacillus iners")+xlab("Metagenomic Subspecies")+scale_fill_manual(values = c("gray","black"), labels=c("Asymptomatic BV, Prevalence Among those with L. iners: 89.2%", "Symptomatic BV, Prevalence Among those with L. iners: 10.7%"))+ylim(c(0,100))
+ggsave("Liners_mgSs_bv_sym.pdf", height=3 , width=4)
+
+rm(Amsel-BV.ornot)
+for (n in unique(li.s$mgSs)[-c(3,6)]){
+  print(n)
+  test<-li.s[li.s$mgSs == n & !is.na(li.s$`Amsel-BV`_sym) & !li.s$`Amsel-BV`_sym %in% "noBV", ]
+  summary(m<-chisq.test(table(test$`Amsel-BV`_sym, test$mgSs), p=c(0.88, 0.12)))
+  tab <- cbind(mgCST=n, X2 = as.data.frame(m["statistic"]), p = as.data.frame(m["p.value"]), nSamples=nrow(test), propBV = as.vector(prop.table(table(test$`Amsel-BV`_sym)))[1], prop_noBV = as.vector(prop.table(table(test$`Amsel-BV`_sym)))[2],  test="X2")
+  rownames(tab)<-tab["mgCST"]
+  if (exists("Amsel-BV.ornot")){
+    Amsel-BV.ornot<-as.data.frame(merge(Amsel-BV.ornot, tab, all=TRUE))
+    }else{
+    Amsel-BV.ornot<-tab
+    }
+}
+## all mgSs 3 is asymp*
+## No Li mgSs is associated with symBV.
+```
+
+## Li gene groups and BV
+```{r}
+li.gg.stats<-data.frame()
+rm(genes.pa)
+g.genes.pa.s<-data.frame()
+li.genes<-ngl.gene.counts.list.mgSs.pa.clean$Lactobacillus_iners
+for (i in unique(genes.clusters.deep$Lactobacillus_iners$gene_group)){
+    g6.genes<-li.genes[rownames(li.genes) %in% genes.clusters.deep$Lactobacillus_iners[genes.clusters.deep$Lactobacillus_iners$gene_group %in% i, "VIRGO_ID"], ]
+    g6.genes.pa<-as.data.frame(colSums(g6.genes))
+    names(g6.genes.pa)<-"nGenes"
+    g6.genes.pa$gene_group<-i
+    g6.genes.pa$UID<-rownames(g6.genes.pa)
+    g6.genes.pa<-unique(merge(g6.genes.pa, mgCSTs.samples.meta[, c("Amsel-BV", "SID", "Sym-Amsel-BV", "UID")], all.x=TRUE))
+    g6.genes.pa.s<-g6.genes.pa[g6.genes.pa$SID %in% names(table(g6.genes.pa$SID))[table(g6.genes.pa$SID) == 1] & !is.na(g6.genes.pa$`Amsel-BV`), ]
+    
+    
+    ## If a sample has at least 30% of the genes in the gene group, consider the gene group present
+    g6.genes.pa.s$gg_present<-ifelse(g6.genes.pa.s[,2] > max(colSums(g6.genes))*0.3, 1, 0)
+    print(i)
+    print(prop.table(table(g6.genes.pa.s$gg_present, g6.genes.pa.s$`Amsel-BV`), 1))
+      #      Amsel-BV      noBV
+      # 0 0.4458438 0.5541562
+      # 1 0.8928571 0.1071429
+    if(exists("genes.pa")){
+      genes.pa<-merge(genes.pa, g6.genes.pa.s, all=TRUE)
+    }else{
+      genes.pa<-g6.genes.pa.s
+    }
+    
+    
+    # for each gene group, compare the proportion of samples with Amsel-BV to the study-wide proportion
+    g6.genes.pa.s<-g6.genes.pa.s[g6.genes.pa.s$gg_present > 0, ]
+    summary(m<-chisq.test(table(g6.genes.pa.s[!is.na(g6.genes.pa.s$`Amsel-BV`), "Amsel-BV"]), p=c(0.458, 0.542)))
+    tab <- cbind(gene_group=i, X2 = as.data.frame(m["statistic"]), p = as.data.frame(m["p.value"]), test="X2")
+    li.gg.stats<-rbind(li.gg.stats, tab)
+ }
+
+colTbl1<-RColorBrewer::brewer.pal(9, "Set1")
+colTbl2<-RColorBrewer::brewer.pal(3, "Paired")
+colTbl1<-c(colTbl1, colTbl2)
+colTbl<-as.data.frame(cbind(gene_group=c(1:10), color=colTbl1[1:10]))
+to.plot<-genes.pa[!is.na(genes.pa$`Amsel-BV`) & !is.na(genes.pa$gene_group) & genes.pa$gg_present > 0, ]
+to.plot$`Amsel-BV`<-ifelse(to.plot$`Amsel-BV` == "Amsel-BV", to.plot$gene_group, " noBV")
+cols<-as.vector(colTbl[match(sort(unique(to.plot$`Amsel-BV`)), colTbl$gene_group), "color"])
+cols[1]<-"black"
+
+ggplot(to.plot, aes(fill=`Amsel-BV`, x=reorder(factor(gene_group), as.numeric(gene_group))))+geom_bar(color="black", width=0.6, size=0.2)+theme_classic()+theme(text = element_text(size=6),legend.background = element_blank(), legend.title = element_blank())+ylab("Number of Participants with Gene Cluster")+xlab("L. iners Gene Cluster")+scale_fill_manual(values = cols)
+ggsave("Liners_gg_bv.pdf", height=3 , width=7)
+``` 
+
+#### Liners gene/cluster heatmap.
+```{r}
+x<-ngl.gene.counts.list.mgSs.pa.clean$Lactobacillus_iners
+tab<-as.data.frame(cbind(bv.sym=mgCSTs.samples.meta[match(li$UID, mgCSTs.samples.meta$UID), "Sym-Amsel-BV"], bv=mgCSTs.samples.meta[match(li$UID, mgCSTs.samples.meta$UID), "Amsel-BV"], UID=li$UID, mgCST=mgCSTs.samples.meta[match(li$UID, mgCSTs.samples.meta$UID), "mgCST"]))
+tab<-merge(tab, li.m, all=TRUE)
+order<-tab[tab$UID %in% names(x), ]
+x.s<-x[, order[order(order$mgSs, order$bv.sym), "UID"]]
+
+library(vegan)
+genes.dist<-vegdist(x, method="jaccard", binary = TRUE)
+genes.hc<-hclust(as.dist(genes.dist), method = "ward")
+genes.clusters<-as.data.frame(cbind(VIRGO_ID=names(cutree(genes.hc, k=10)), new_gene_group=cutree(genes.hc, k=10)))
+
+samples.dist<-vegdist(t(x), method="jaccard", binary = TRUE)
+samples.hc<-hclust(as.dist(samples.dist), method = "ward")
+dtc1<-dynamicTreeCut::cutreeDynamic(samples.hc, distM = as.matrix(samples.dist), method="hybrid", minClusterSize = 2)
+samples.clusters<-as.data.frame(cbind(SID=samples.hc$labels, new_sample_cluster=cutree(samples.hc, k=6)))
+
+
+colTbl1<-RColorBrewer::brewer.pal(9, "Set1")
+colTbl2<-RColorBrewer::brewer.pal(3, "Paired")
+cols<-c(colTbl1, colTbl2)
+colTbl1<-c(RColorBrewer::brewer.pal(8, "Set3"))
+png(paste("L_iners_subspecies_heatmap_gg", today2, ".png", sep="_"), width=3, height=4, bg="transparent", units="in", res=1200)
+par(cex.main=0.5)
+gplots::heatmap.2(as.matrix(x.s), Colv = FALSE, Rowv = as.dendrogram(genes.hc), col=colfunc(2), labRow = FALSE, labCol = NA, key = FALSE, trace="none", main = paste("\nNo. Samples=", paste(ncol(x.s)), paste("No. Genes=", paste(nrow(x.s), sep=" "), sep=""), sep=" "), RowSideColors = cols[as.factor(as.numeric(genes.clusters$new_gene_group))], ColSideColors = colTbl1[as.factor(order[match(colnames(x.s), order$UID), "mgSs"])], margins = c(0.1, 0.1))
+#legend(inset = 0, x=-0.5, y=1, legend = legend.choice, col = legend.col, lty = 1, lwd = 5, cex=.3, bty="n", title = "Cluster Color Key")
+dev.off()
+
+"#FFFF33"
+colTbl1<-c("black", "red", "gray")
+png(paste("L_iners_subspecies_heatmap_bv", today2, ".png", sep="_"), width=3, height=4, bg="transparent", units="in", res=1200)
+par(cex.main=0.5)
+gplots::heatmap.2(as.matrix(x.s), Colv = FALSE, Rowv = as.dendrogram(genes.hc), col=colfunc(2), labRow = FALSE, labCol = NA, key = FALSE, trace="none", main = paste("\nNo. Samples=", paste(ncol(x.s)), paste("No. Genes=", paste(nrow(x.s), sep=" "), sep=""), sep=" "), RowSideColors = cols[as.factor(as.numeric(genes.clusters$new_gene_group))], ColSideColors = colTbl1[as.factor(order[match(colnames(x.s), order$UID), "bv.sym"])], margins = c(0.1, 0.1))
+#legend(inset = 0, x=-0.5, y=1, legend = legend.choice, col = legend.col, lty = 1, lwd = 5, cex=.3, bty="n", title = "Cluster Color Key")
+dev.off()
+```
+ *** 29Jun2022: Next check gene group 6 genes to ensure that text is the same for results section (VIRGO_IDs and CDSEARCH)
+
+## write/read genes for cdsearch
+```{r}
+for(f in c(1:10)){
+  write.table(genes.clusters[genes.clusters$gene_group %in% f, "VIRGO_ID"], paste("li_gg_", f, "_", today2, ".txt", sep=""), sep="\t", quote=F, col.names = F, row.names=F)
+}
+```
+
+```{r}
+li6<-read.delim("RDS_files/li_gg_6_28Jun2022_hitdata.txt", header=T, sep="\t", skip = 7)
+li6$mgSs_gene_group<-6
+li7<-read.delim("RDS_files/li_gg_7_28Jun2022_hitdata.txt", header=T, sep="\t", skip = 7)
+li7$mgSs_gene_group<-7
+li8<-read.delim("RDS_files/li_gg_8_28Jun2022_hitdata.txt", header=T, sep="\t", skip = 7)
+li8$mgSs_gene_group<-8 
+li<-rbind(li6, li7, li8)
+li.sp<-li[li$Hit.type %in% "specific", ]
+write.table(li.sp, "Table L iners CDSEARCH.txt", sep="\t", row.names = F, col.names = T, quote=F)
+```
+
+
+
+# Story 3: Gardnerella Figures
+## Gardnerella genomospecies
+```{r gardnerella}
+
+require(stringr)
+g<-read.delim("RDS_files/gardenerella_genomosp.txt", header=T)
+g.iso<-read.delim("RDS_files", check.names = F)
+g.iso$Species<-paste(str_split_fixed(pattern = " ", g.iso$`Organism Name`, 3)[,1], str_split_fixed(pattern = " ", g.iso$`Organism Name`, 3)[,2], sep="_")
+g.iso<-g.iso[!g.iso$Species %in% "uncultured Gardnerella", ]
+g.iso<-g.iso[,c(3,15:16)]
+g.iso$type<-"isolate"
+names(g.iso)<-c("strain", "nGenes", "Species", "type")
+
+ggplot(g.iso, aes(x=Species, y=g.iso$`Annotation Count Gene Total`))+geom_boxplot(notch = T)
+
+g.counts<-ngl.gene.counts.cast[ngl.gene.counts.cast$PC %in% g$VIRGO_ID, ]
+g.counts$Species<-g[match(g.counts$PC, g$VIRGO_ID), "Species"]
+g.counts.sum<-as.data.frame(g.counts %>% group_by(Species, sampleID) %>% summarise(nGenes=sum(presence)))
+g.counts.sum$type<-"MG"
+g.counts.sum$Species<-gsub("Gardnerella_swidsinkii", "Gardnerella_swidsinskii", g.counts.sum$Species)
+
+g.total<-merge(g.counts.sum, g.iso, all=TRUE)
+ggplot(g.total[!is.na(g.total$nGenes) & g.total$Species %in% c("Gardnerella_leopoldii", "Gardnerella_piotii", "Gardnerella_swidsinskii", "Gardnerella_vaginalis"), ], aes(x=type, y=nGenes, fill=type))+geom_boxplot(notch = T, outlier.shape = NA)+geom_jitter(width=0.2, size=0.2)+facet_wrap(~Species, scales="free")+theme_bw()+scale_fill_manual(values=c("gray", "gold2"))+xlab("")+ylab("Number of Genes")
+ggsave("mgCST_Gardnerella_isolate_to_mg.pdf")
+```
+** Updated to remove g_Gardnerella
+```{r Gardnerella_vaginalis speciation FIGURE }
+g<-read.delim("RDS_files/gardenerella_genomosp.txt", header=T)
+
+library(reshape2)
+gv.genes<-ngl.gene.counts.cast[ngl.gene.counts.cast$PC %in% g$VIRGO_ID, ]
+## 15,808 genes across 1174 samples
+names(gv.genes)[1]<-"VIRGO_ID"
+gv.genes.m<-reshape2::melt(gv.genes, id.vars="VIRGO_ID", variable.name = "UID", value.name = "Abundance")
+#  SID         NR    coverage
+#1 323884_MG 2531364035 0.000000000
+gv.genes.m<-gv.genes.m[gv.genes.m$Abundance > 0, ]
+gv.genes.m$Species<-g[match(gv.genes.m$VIRGO_ID, g$VIRGO_ID), "Species"]
+gv.genes.m$mgCST<-mgCSTs.samples.meta[match(gv.genes.m$UID, mgCSTs.samples.meta$UID), "mgCST"]
+colTbl2<-c(RColorBrewer::brewer.pal(8, "Set2"), RColorBrewer::brewer.pal(8,"Dark2"))
+colTbl2[15]<-"black"
+to.plot<-as.data.frame(gv.genes.m[gv.genes.m$mgCST %in% c(20:25), ] %>% group_by(UID, Species, mgCST) %>% summarise(nAbundance=sum(Abundance)))
+to.plot$bv<-mgCSTs.samples.meta[match(to.plot$UID, mgCSTs.samples.meta$UID), "Sym-Amsel-BV"]
+orders<-unique(to.plot[order(to.plot$mgCST, to.plot$bv), "UID"])
+to.plot$UID<-factor(to.plot$UID, levels=orders)
+
+ggplot(to.plot, aes(x=UID, y=nAbundance, fill=Species, color=Species))+geom_bar(stat="identity", position="fill")+theme_classic()+scale_fill_manual(values = colTbl2)+scale_color_manual(values = colTbl2)+theme(line=element_line(linewidth = 0.1), legend.title = element_blank(),legend.box.background = element_rect(colour="transparent"),rect = element_rect(linewidth = 0.1), text = element_text(size=8))+ylab("")+xlab("")+facet_wrap(~mgCST, scales = "free_x", nrow=1)
+ggsave("Proportion_of_gvag_species_by_mgCST.pdf", height=3, width=10)
+
+colTbl1<-c("black", "red", "gray", "white")
+ggplot(to.plot, aes(x=UID, y=nAbundance, fill=bv))+geom_bar(stat="identity", position="fill")+theme_classic()+scale_fill_manual(values = colTbl1)+scale_color_manual(values = colTbl1)+theme(line=element_line(linewidth = 0.1), legend.title = element_blank(),legend.box.background = element_rect(colour="transparent"),rect = element_rect(linewidth = 0.1), text = element_text(size=8))+ylab("")+xlab("")+facet_wrap(~mgCST, scales = "free_x", nrow=1)
+ggsave("Proportion_of_gvag_species_by_mgCST_bv.pdf", height=3, width=10)
+
+#Examine the distribution of coverage for a particular gene in each mgSS
+gv.sp.genes[is.na(gv.sp.genes)]<-"Species Unknown"
+gv.sp.genes<-subset(gv.sp.genes, gv.sp.genes$new_sp != "g_Gardnerella")
+levels(gv.sp.genes)
+gv.sp.genes$new_sp<-factor(gv.sp.genes$new_sp)
+levels(gv.sp.genes$new_sp)
+table(gv.sp.genes$new_sp)
+gvag.sample.cluster<-samples.clusters$Gardnerella_vaginalis
+names(gvag.sample.cluster)<-c("SID", "gvag_ss")
+gv.sp.genes.cluster.merge<-merge(gv.sp.genes, gvag.sample.cluster, all.x=TRUE)
+# [1] 18558592        5
+gv.sp.mgss.genes<-gv.sp.genes.cluster.merge[!is.na(gv.sp.genes.cluster.merge$gvag_ss), ]
+# [1] 13911040        5
+# [1] 7651858       6 (after removing g_Gardnerella)
+saveRDS("RDS_files/gv.sp.mgss.genes.RDS")
+
+
+gv.sp.mgss.genes<-merge(gv.sp.mgss.genes, all.clean.info.vog, all.x=TRUE) ## K03466 secretion systems
+gv.sp.mgss.genes<-merge(gv.sp.mgss.genes, mgCSTs.samples.meta, all.x=TRUE)
+
+require(dplyr)
+t<-as.data.frame(gv.sp.mgss.genes %>% group_by(mgCST, SID, new_sp, `Amsel-BV`_sym, Nugent_cat, Nugent) %>% summarise(nAbundance=sum(Abundance)))
+
+library(dplyr)
+t<-gv.sp.mgss.genes %>%
+    dplyr::group_by(gvag_ss, new_sp) %>%
+      dplyr::summarize(median_abundance = median(Abundance))
+
+gv.sp.mgss.genes.nozero<-gv.sp.mgss.genes[gv.sp.mgss.genes$Abundance > 0, ]
+
+v<-gv.sp.mgss.genes.nozero %>%
+    dplyr::group_by(gvag_ss, new_sp, SID) %>%
+      dplyr::summarize(sum_gene_abundance = sum(Abundance))
+
+v.mgCST<-merge(as.data.frame(v), mgCSTs.samples.meta, by="SID", all=TRUE)
+v.mgCST<-v.mgCST[complete.cases(v.mgCST), ]
+
+
+
+colfunc <- colorRampPalette(c("antiquewhite", "mediumblue"))
+i<-"Gardnerella_vaginalis"
+ 
+png("mgSs_summary_tables/Gvag_pa.png", width=7, height=9, bg="transparent", units="in", res=600)
+    legend("topleft", legend = unique(gv.sp.mgss.genes[match(rownames(ngl.gene.counts.list.mgSs.pa.clean[[i]]),gv.sp.mgss.genes$VIRGO_ID), "new_sp"]), col = unique(colTbl2[gv.sp.mgss.genes[match(rownames(ngl.gene.counts.list.mgSs.pa.clean[[i]]),gv.sp.mgss.genes$VIRGO_ID), "new_sp"]]), lty= 1, lwd = 5, cex=.7, bty="n", title = "Cluster Color Key")
+    dev.off()
+## Remake the heatmap removing all genes not annotated to a species
+```
+## Gardnerella gene groups and BV
+```{r}
+gv.gg.stats<-data.frame()
+rm(genes.pa)
+g.genes.pa.s<-data.frame()
+li.genes<-ngl.gene.counts.list.mgSs.pa.clean$Gardnerella_vaginalis
+for (i in unique(genes.clusters.deep$Gardnerella_vaginalis$gene_group)){
+    g6.genes<-li.genes[rownames(li.genes) %in% genes.clusters.deep$Gardnerella_vaginalis[genes.clusters.deep$Gardnerella_vaginalis$gene_group %in% i, "VIRGO_ID"], ]
+    g6.genes.pa<-as.data.frame(colSums(g6.genes))
+    names(g6.genes.pa)<-"nGenes"
+    g6.genes.pa$gene_group<-i
+    g6.genes.pa$UID<-rownames(g6.genes.pa)
+    g6.genes.pa<-unique(merge(g6.genes.pa, mgCSTs.samples.meta[, c("Amsel-BV", "SID", "Sym-Amsel-BV", "UID")], all.x=TRUE))
+    g6.genes.pa.s<-g6.genes.pa[g6.genes.pa$SID %in% names(table(g6.genes.pa$SID))[table(g6.genes.pa$SID) == 1] & !is.na(g6.genes.pa$`Amsel-BV`), ]
+    
+    
+    ## If a sample has at least 30% of the genes in the gene group, consider the gene group present
+    g6.genes.pa.s$gg_present<-ifelse(g6.genes.pa.s[,2] > max(colSums(g6.genes))*0.3, 1, 0)
+    print(i)
+    print(prop.table(table(g6.genes.pa.s$gg_present, g6.genes.pa.s$`Amsel-BV`), 1))
+      #      Amsel-BV      noBV
+      # 0 0.4458438 0.5541562
+      # 1 0.8928571 0.1071429
+    if(exists("genes.pa")){
+      genes.pa<-merge(genes.pa, g6.genes.pa.s, all=TRUE)
+    }else{
+      genes.pa<-g6.genes.pa.s
+    }
+    
+    
+    # for each gene group, compare the proportion of samples with Amsel-BV to the study-wide proportion
+    g6.genes.pa.s<-g6.genes.pa.s[g6.genes.pa.s$gg_present > 0, ]
+    summary(m<-chisq.test(table(g6.genes.pa.s[!is.na(g6.genes.pa.s$`Amsel-BV`), "Amsel-BV"]), p=c(0.58, 0.42)))
+    tab <- cbind(gene_group=i, X2 = as.data.frame(m["statistic"]), p = as.data.frame(m["p.value"]), test="X2")
+    gv.gg.stats<-rbind(gv.gg.stats, tab)
+ }
+
+colTbl1<-RColorBrewer::brewer.pal(9, "Set1")
+colTbl2<-RColorBrewer::brewer.pal(3, "Paired")
+colTbl1<-c(colTbl1, colTbl2)
+colTbl<-as.data.frame(cbind(gene_group=c(1:10), color=colTbl1[1:10]))
+to.plot<-genes.pa[!is.na(genes.pa$`Amsel-BV`) & !is.na(genes.pa$gene_group) & genes.pa$gg_present > 0, ]
+to.plot$`Amsel-BV`<-ifelse(to.plot$`Amsel-BV` == "clinBV", to.plot$gene_group, "noBV")
+to.plot$`Amsel-BV`<-factor(to.plot$`Amsel-BV`, levels=c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "noBV"))
+cols<-as.vector(colTbl[match(sort(unique(to.plot$`Amsel-BV`)), colTbl$gene_group), "color"])
+cols[11]<-"black"
+
+ggplot(to.plot, aes(fill=`Amsel-BV`, x=reorder(factor(gene_group), as.numeric(gene_group))))+geom_bar(color="black", width=0.6, size=0.2)+theme_classic()+theme(line = element_line(linewidth = 0.1), text = element_text(size=8),legend.position = "none", legend.title = element_blank())+xlab("G. vaginalis Gene Cluster")+scale_fill_manual(values = cols)
+ggsave("Gvag_gg_bv.pdf", height=2 , width=10)
+
+g<-read.delim("RDS_files/gardenerella_genomosp.txt", header=T)
+l<-genes.clusters.deep$Gardnerella_vaginalis
+l<-merge(g, l, all=TRUE)
+colTbl2<-c(RColorBrewer::brewer.pal(8, "Set2"), RColorBrewer::brewer.pal(8,"Dark2"))
+colTbl2[15]<-"black"
+
+ggplot(l[!is.na(l$Species), ], aes(fill=Species, x=reorder(factor(gene_group), as.numeric(gene_group))))+geom_bar(color="black", width=0.6, size=0.2)+theme_classic()+theme(line = element_line(linewidth = 0.1), text = element_text(size=8),legend.position = "none", legend.title = element_blank())+ylab("Number of Genes")+xlab("G. vaginalis Gene Cluster")+scale_fill_manual(values = colTbl2)
+ggsave("Gvag_gg_species.pdf", height=2 , width=10)
+```
+
+#### Gardnerella gene/cluster heatmap.
+```{r}
+x<-ngl.gene.counts.list.mgSs.pa.clean$Gardnerella_vaginalis
+tab<-as.data.frame(cbind(bv.sym=mgCSTs.samples.meta[match(li$UID, mgCSTs.samples.meta$UID), "Sym-Amsel-BV"], bv=mgCSTs.samples.meta[match(li$UID, mgCSTs.samples.meta$UID), "Amsel-BV"], UID=li$UID, mgCST=mgCSTs.samples.meta[match(li$UID, mgCSTs.samples.meta$UID), "mgCST"]))
+tab<-merge(tab, li.m, all=TRUE)
+order<-tab[tab$UID %in% names(x), ]
+x.s<-x[, order[order(order$mgSs, order$bv.sym), "UID"]]
+
+library(vegan)
+genes.hc<-readRDS("RDS_files/genes.hc.RDS")
+
+colTbl1<-RColorBrewer::brewer.pal(9, "Set1")
+colTbl2<-RColorBrewer::brewer.pal(3, "Paired")
+cols<-c(colTbl1, colTbl2)
+colTbl1<-c(RColorBrewer::brewer.pal(8, "Set3"))
+png(paste("Gvag_subspecies_heatmap_gg", today2, ".png", sep="_"), width=3, height=4, bg="transparent", units="in", res=1200)
+par(cex.main=0.5)
+gplots::heatmap.2(as.matrix(x.s), Colv = FALSE, Rowv = as.dendrogram(genes.hc$Gardnerella_vaginalis), col=colfunc(2), labRow = FALSE, labCol = NA, key = FALSE, trace="none", main = paste("\nNo. Samples=", paste(ncol(x.s)), paste("No. Genes=", paste(nrow(x.s), sep=" "), sep=""), sep=" "), RowSideColors = cols[as.factor(as.numeric(genes.clusters.deep$Gardnerella_vaginalis$gene_group))], ColSideColors = colTbl1[as.factor(order[match(colnames(x.s), order$UID), "mgSs"])], margins = c(0.1, 0.1))
+#legend(inset = 0, x=-0.5, y=1, legend = legend.choice, col = legend.col, lty = 1, lwd = 5, cex=.3, bty="n", title = "Cluster Color Key")
+dev.off()
+
+"#FFFF33"
+colTbl1<-c("black", "red", "gray")
+png(paste("Gvag_subspecies_heatmap_bv", today2, ".png", sep="_"), width=3, height=4, bg="transparent", units="in", res=1200)
+par(cex.main=0.5)
+gplots::heatmap.2(as.matrix(x.s[1:10,]), Colv = FALSE, Rowv = FALSE, col=colfunc(2), labRow = FALSE, labCol = NA, key = FALSE, trace="none", main = paste("\nNo. Samples=", paste(ncol(x.s)), paste("No. Genes=", paste(nrow(x.s), sep=" "), sep=""), sep=" "), ColSideColors = colTbl1[as.factor(order[match(colnames(x.s), order$UID), "bv.sym"])], margins = c(0.1, 0.1))
+#legend(inset = 0, x=-0.5, y=1, legend = legend.choice, col = legend.col, lty = 1, lwd = 5, cex=.3, bty="n", title = "Cluster Color Key")
+dev.off()
+```
+ *** 29Jun2022: Next check gene group 6 genes to ensure that text is the same for results section (VIRGO_IDs and CDSEARCH)
+
+## Vaginolysin / sialidase / beta-galactosidase
+```{r Vaginolysin / sialidase / beta-galactosidase}
+require(reshape2)
+require(ggplot2)
+require(dplyr)
+pathogenicity<-read.delim("RDS_files/gardnerella_vaginolysin_betagal_sialidase_genes.txt", header=T)
+pathogenicity$gene_group<-genes.clusters.deep$Gardnerella_vaginalis[match(pathogenicity$VIRGO_ID, genes.clusters.deep$Gardnerella_vaginalis$VIRGO_ID), "gene_group"]
+ngl.gene.counts.list.mgSs.pa.clean<-readRDS("RDS_files/ngl.gene.counts.list.mgSs.pa.clean.RDS")
+gv<-ngl.gene.counts.list.mgSs.pa.clean$Gardnerella_vaginalis
+path.genes<-gv[rownames(gv) %in% pathogenicity$VIRGO_ID, ]
+path.genes$VIRGO_ID<-rownames(path.genes)
+path.genes.m<-melt(path.genes, id.vars = "VIRGO_ID", variable.name = "SID", value.name = "presence")
+path.genes.m<-merge(path.genes.m, pathogenicity, all=TRUE)
+path.genes.m<-merge(path.genes.m, mgCSTs.samples.meta[,c("SID", "mgCST", "`Amsel-BV`", "`Amsel-BV`_sym", "SID")])
+
+ggplot(path.genes.m[path.genes.m$presence == 1, ], aes(x=factor(mgCST)))+geom_bar()+facet_wrap(~Annotation)+ylab("Number of Pathogenicity Genes Present")
+
+l<-as.data.frame(path.genes.m %>% group_by(mgCST, SID, Annotation) %>% summarise(Sum=sum(presence)))
+ggplot(l, aes(x=factor(mgCST), y=Sum))+geom_boxplot()+facet_wrap(~Annotation, scales = "free_y")+ylab("Number of Pathogenicity per Sample")
+
+require(EnvStats)
+s<-l[l$mgCST %in% c(20:25), ]
+cols<-mgCST[match(sort(unique(s$mgCST)), mgCST$mgCST), "color"]
+ggplot(l[l$mgCST %in% c(19:24), ], aes(x=factor(mgCST), y=Sum, fill=factor(mgCST)))+geom_boxplot(outlier.size = 0.001, outlier.shape = NA, lwd=0.2, notch = T)+geom_jitter(size=.01, width=0.2, height=0.01)+ylab("Number of Pathogenicity Genes per Sample")+xlab("mgCST")+theme_bw()+scale_fill_manual(values = cols)+theme(legend.position = "none", text = element_text(size=6, colour = "black"), line = element_line(size=0.1), axis.text = element_text(color="black"))+stat_n_text(size = 1.5)+facet_wrap(~Annotation, scales = "free_y", shrink = TRUE)+ylim(c(0,30))
+ggsave("mgCSTs_gardnerella_path.pdf", height=2, width=5)
+```
+

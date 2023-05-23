@@ -1,0 +1,651 @@
+---
+title: "mgss_mgcst"
+output: 
+  html_document: 
+    number_sections: yes
+    toc: yes
+---
+
+Overall summary: 
+[1] 809477   1945 (genes x samples)
+
+Summary rowSums:
+    Min.  1st Qu.   Median     Mean  3rd Qu.     Max.
+       0       77      700    20330     5508 32150000
+       
+Summary colSums:
+    Min.  1st Qu.   Median     Mean  3rd Qu.     Max.
+    7646  1542000  4051000  8461000 11390000 91940000
+[1] 807825   1949
+
+After cleanup:
+dim(all.clean.100k) 
+[1] 807825   1898 (genes x samples) rows x columns
+
+Summary rowSums:
+      Min.  1st Qu.   Median     Mean  3rd Qu.     Max. 
+       0       78      704    20368     5532 32146706
+Summary colSums:
+      Min.  1st Qu.   Median     Mean  3rd Qu.     Max. 
+    109250  1646979  4184860  8668998 11606312 91935305 
+       
+       
+
+#Package install
+```{r Package install}
+library(philentropy)
+library(dynamicTreeCut)
+library(plyr)
+library(dplyr)
+library(tidyverse)
+library(gplots)
+library(ggplot2)
+library(reshape2)
+library(RColorBrewer)
+require(readxl)
+```
+
+#Read in Data
+```{r}
+all<-data.table::fread("SOURCE_DATA/MG_NRabund_1944_020720.txt", header=TRUE, fill=TRUE, stringsAsFactors = FALSE, data.table = FALSE, showProgress = TRUE)
+gen.sizes.sum<-readRDS("RDS_files/gen.sizes.sum.RDS")
+```
+
+#Data cleaning
+```{r 1. Data cleaning}
+all[is.na(all)]<-0
+dim(all)
+## [1] 809477   1949
+## Duplicate VIRGO_ID cleanup
+dups<-all[duplicated(all$VIRGO_ID), "VIRGO_ID"]
+## NO DUPS ## rowSums(all[all$VIRGO_ID %in% dups, 5:ncol(all)])
+rownames(all)<-all$VIRGO_ID
+
+r<-rowSums(all[, 5:ncol(all)])
+c<-colSums(all[, 5:ncol(all)])
+
+summary(r)
+##    Min.  1st Qu.   Median     Mean  3rd Qu.     Max.
+##       0       77      700    20330     5508 32150000
+summary(c)
+##    Min.  1st Qu.   Median     Mean  3rd Qu.     Max.
+##    7646  1542000  4051000  8461000 11390000 91940000
+
+## After fixing dups: remove all rows sums of 0
+rm.genes<-r[r==0]
+all.clean<-all[!all$VIRGO_ID %in% names(rm.genes), ]
+dim(all.clean)
+## [1] 807825   1949
+rm(all)
+
+## Remove all samples w/nReads < 100k
+s100k<-c[c > 100000]
+all.clean.100k<-all.clean[, names(all.clean) %in% names(s100k)]
+all.clean.info<-all.clean[,1:4]
+saveRDS(all.clean.100k, "RDS_files/all.clean.100k.RDS")
+saveRDS(all.clean.info, "RDS_files/all.clean.info.RDS")
+```
+
+#Normalize read counts by gene length and make species-specific list of dataframes
+```{r 2. Normalize read counts by gene length and make species-specific list of dataframes}
+## Read in data, if necessary
+gen.sizes.sum<-readRDS("RDS_files/gen.sizes.sum.RDS")
+
+gene.counts.list<-list()
+ngl.gene.counts.list<-list()
+for (i in sort(unique(all.s.info[!all.s.info$Taxa == "", "Taxa"]))){  ## 263 taxa to consider. 
+  ## Make table of samples by genes for the taxon
+  print(i)
+  gene.count<-as.data.frame(all.s.100k[all.s.info$Taxa == i, ])
+  taxa.info<-all.s.info[all.s.info$Taxa == i, ]
+  gene.count.s<-gene.count[colSums(gene.count) > 0]
+  gene.count.s<-gene.count.s[rowSums(gene.count) > 0, ]
+  gene.count.s.ngl<-gene.count.s ## Make a cp of the dataframe to fill in with ngl
+  ## normalize read counts by gene length -> ngl
+  for (n in rownames(gene.count.s)) 
+  {
+    gL<-taxa.info[taxa.info$VIRGO_ID == n, "Length"]
+    gene.count.s.ngl[n, ]<-apply(gene.count.s[n, ], 2, function(x) (x*150)/gL) ## normalize nReads to gene length. 
+  }
+  gene.counts.list[[i]]<-gene.count.s ## place the raw gene count into the list 
+  ngl.gene.counts.list[[i]]<-gene.count.s.ngl
+  rm(gene.count.s)
+  rm(gene.count.s.ngl)
+}
+
+## remove df's that don't have enough genes (any)
+gene.counts.list<-gene.counts.list[sapply(gene.counts.list, function(x) any(nrow(x) > 0))]
+saveRDS(object = gene.counts.list, file = "RDS_files/gene.counts.list.RDS")
+ngl.gene.counts.list<-ngl.gene.counts.list[sapply(ngl.gene.counts.list, function(x) any(nrow(x) > 0))]
+saveRDS(object = ngl.gene.counts.list, file = "RDS_files/ngl.gene.counts.list.RDS")
+```
+
+#Filter taxa for samples w/ 0.75 and 0.5X coverage cutoff to determine if mgSs should be performed.
+```{r 3. Filter taxa for samples w/ 0.75 and 0.5X coverage cutoff to determine if mgSs should be performed. }
+## Bacillus_cereus is NULL in both gene.counts.list and ngl.gene.counts.list... rm.
+gene.counts.list$Bacillus_cereus<-NULL
+ngl.gene.counts.list$Bacillus_cereus<-NULL
+
+ngl.gene.counts.list.mgSs<-list()
+mgss.taxa<-vector()
+other.taxa<-vector()
+for (i in names(ngl.gene.counts.list)){
+  l<-gen.sizes.sum[gen.sizes.sum$taxonomy == i, "median"]
+  if (i == "Acidaminococcus_intestini"){ l<-2167 }
+  if (i == "Acinetobacter_baumannii"){ l<-3715 }
+  if (i == "BVAB1"){ l<-1421 }
+  if (i == "BVAB3"){ l<-1474.5 }
+  if (i == "Megasphaera_genomosp."){l<-1521}
+  if (i == "Prevotella_tannerae"){l<-2170}
+  if (i == "Dialister_microaerophilus"){l<-1208}
+  if (i == "Clostridium_difficile"){l<-3829}
+  if (length(l) == 0) { l<-1000}  #gene.counts.list[[i]
+  #sub<-apply(ngl.gene.counts.list[[i]], 2, function(x) sum (x > 0)) ## For each column, get the total number of rows with a non-zero value. 
+  samples.w.nGenes_0.5X<-apply(ngl.gene.counts.list[[i]], 2, function(x) sum (x > 0.5)) ## nGenes in samples w/ngl gene counts > 0.5X
+  test<-as.data.frame(ngl.gene.counts.list[[i]][, names(ngl.gene.counts.list[[i]]) %in% names(samples.w.nGenes_0.5X[samples.w.nGenes_0.5X >= (l*.75)])])
+    #if (is.null(ncol(test)) == FALSE){
+  #samples.keep<-names(nGenes_0.5X[nGenes_0.5X > 0.75*l])
+  if (ncol(test) > 19){ ## If enough samples (> 19) w/enough high-coverage (>0.5X) genes ( > 0.75*medGenome), then do mgSs.
+    ngl.gene.counts.list.mgSs[[i]]<-test
+    mgss.taxa<-append(mgss.taxa, i)
+  } else {
+    other.taxa<-append(other.taxa, i)
+  }
+}
+```
+
+#Convert to Presence Absence + rm rows (genes) summing to zero
+```{r 4. Convert to Presence Absence + rm rows (genes) summing to zero}
+ngl.gene.counts.list.mgSs.pa<-lapply(ngl.gene.counts.list.mgSs, function(x) replace(x, x > 0, 1))
+## dim(x) Gardnerella_vaginalis
+## [1] 24540  1351
+ngl.gene.counts.list.mgSs.pa.clean<-lapply(ngl.gene.counts.list.mgSs.pa, function(x) x[which(rowSums(x) > 0), ])
+## dim(x) Gardnerella_vaginalis
+## [1] 24535  1351
+saveRDS(object = ngl.gene.counts.list.mgSs.pa.clean, file = "RDS_files/ngl.gene.counts.list.mgSs.pa.clean.RDS")
+
+ngl.gene.counts.list.colSums<-lapply(ngl.gene.counts.list.mgSs.pa.clean, as.data.frame(colSums))
+
+# Make table of samples by Taxa where values are nGenes (using ngl Reads)
+library(tidyverse)
+ngl.nGenes<-ngl.gene.counts.list.colSums %>% map( ~ .x %>% rownames_to_column('rn')) %>% reduce(full_join, by = 'rn')
+## Run the above code first so that ngl.abund "exists" for the rename_at function in the next step 
+ngl.nGenes<-ngl.gene.counts.list.colSums %>% map( ~ .x %>% rownames_to_column('rn')) %>% reduce(full_join, by = 'rn') %>% rename_at(2:ncol(ngl.nGenes), ~ names(ngl.gene.counts.list.colSums))
+
+ngl.nGenes[is.na(ngl.nGenes)]<-0
+rownames(ngl.nGenes)<-ngl.nGenes$rn
+ngl.nGenes$rn<-NULL
+saveRDS(ngl.nGenes, "RDS_files/ngl.nGenes.RDS")
+```
+
+```{r SANITY CHECK SUMMARY DATA}
+## Make a table
+## Taxon nSamples Summary-nGenes/Sample
+
+## All taxa should have > 20 samples. All samples should have > 75% of the estimated nGenes in genome
+nSamples.summary<-plyr::ldply(ngl.gene.counts.list.mgSs.pa.clean, function(x) ncol(x), .id = "Taxon")
+colnames(nSamples.summary)<-c("Taxon", "nSamples")
+
+gene.summary<-plyr::ldply(ngl.gene.counts.list.mgSs.pa.clean, function(x) round(summary(colSums(x))), .id = "Taxon")
+ngl.gene.counts.list.pa.clean.summary<-merge(nSamples.summary, gene.summary, all=TRUE)
+
+write.table(ngl.gene.counts.list.pa.clean.summary, "mgSs_Taxon_Summary_nSamples_nGenes.txt", quote=F, row.names = F, sep="\t")
+
+
+## Result - all taxa have enough samples, but some samples have few genes (like G.vag samples). This is because the 75% of the genome filtering step occurred prior to normalization by gene length. Following this step, it may have become apparent that using these rules, some samples do not have enough genes. However, it isn't a clear cut step to simply remove samples below a certain cutoff because in some taxa this could remove samples unnecessarily. Thus, proceed with dist. matrix and clustering.
+```
+
+#mgSs analysis
+## Perform Jaccard clustering of samples (columns) and genes (rows)
+```{r 5. mgSs analysis: Perform Jaccard clustering of samples (columns) and genes (rows)}
+library(vegan)
+genes.dist<-lapply(ngl.gene.counts.list.mgSs.pa.clean, function(x) vegdist(x, method="jaccard", binary = TRUE))
+saveRDS(genes.dist, "RDS_files/genes.dist.RDS")
+samples.dist<-lapply(ngl.gene.counts.list.mgSs.pa.clean, function(x) vegdist(t(x), method="jaccard", binary = TRUE))
+saveRDS(samples.dist, "RDS_files/samples.dist.RDS")
+
+genes.hc<-lapply(genes.dist, function(x) hclust(x, method="ward"))
+saveRDS(genes.hc, "RDS_files/genes.hc.RDS")
+samples.hc<-lapply(samples.dist, function(x) hclust(x, method="ward"))
+saveRDS(samples.hc, "RDS_files/samples.hc.RDS")
+
+
+## Do just some taxa, if needed:
+subset.mgss<-ngl.gene.counts.list.mgSs.pa.clean[names(ngl.gene.counts.list.mgSs.pa.clean) %in% setdiff(names(ngl.gene.counts.list.mgSs.pa.clean), names(samples.clusters))]
+
+library(vegan)
+subset.genes.dist<-lapply(subset.mgss, function(x) vegdist(x, method="jaccard", binary = TRUE))
+subset.samples.dist<-lapply(subset.mgss, function(x) vegdist(t(x), method="jaccard", binary = TRUE))
+subset.genes.hc<-lapply(subset.genes.dist, function(x) hclust(x, method="ward"))
+subset.samples.hc<-lapply(subset.samples.dist, function(x) hclust(x, method="ward"))
+
+genes.dist<-c(genes.dist, subset.genes.dist)
+samples.dist<-c(samples.dist, subset.samples.dist)
+genes.hc<-c(genes.hc, subset.genes.hc)
+samples.hc<-c(samples.hc, subset.samples.hc)
+
+saveRDS(genes.dist, "RDS_files/genes.dist.RDS")
+saveRDS(samples.dist, "RDS_files/samples.dist.RDS")
+saveRDS(genes.hc, "RDS_files/genes.hc.RDS")
+saveRDS(samples.hc, "RDS_files/samples.hc.RDS")
+```
+
+## Define clusters of subset of samples for mgss and genes to explain the mgss
+```{r 6. mgSs analysis: Define clusters of subset of samples for mgss and genes to explain the mgss}
+
+samples.hc<-readRDS("RDS_files/samples.hc.RDS")
+map<-as.data.frame(read_excel("mg_sample_data_sources.xlsx"))
+## rename samples as needed
+for(i in names(samples.hc)){
+  new.names<-as.vector(map[match(samples.hc[[i]]$labels, map$sampleID), "sampleID_2"])
+  samples.hc[[i]]$labels<-new.names
+}
+
+genes.hc<-readRDS("RDS_files/genes.hc.RDS")
+samples.hc<-readRDS("RDS_files/samples.hc.RDS")
+samples.hc.names<-samples.hc
+samples.hc.names<-lapply(samples.hc, function(x) gsub(pattern = "x", replacement = "g", x = t, fixed = TRUE)))
+
+ngl.gene.counts.list.mgSs.pa.clean<-readRDS("RDS_files/ngl.gene.counts.list.mgSs.pa.clean.RDS")
+
+samples.clusters<-list()
+genes.clusters<-list()
+
+for (i in sort(names(genes.hc))){
+  data<-as.data.frame(ngl.gene.counts.list.mgSs.pa.clean[[i]])
+  
+  if(nrow(data) > 200){
+    n<-nrow(data)*0.1
+  } else{
+    n<-nrow(data)*0.2
+  } 
+  
+  dtc1<-dynamicTreeCut::cutreeDynamic(samples.hc[[i]], distM = as.matrix(samples.dist[[i]]), method="hybrid", minClusterSize = 10)
+  samples.clusters[[i]]<-as.data.frame(cbind(sampleID=samples.hc[[i]]$labels, sample_cluster=dtc1))
+  
+  dtc2<-cutree(genes.hc[[i]], k=10)
+  genes.clusters[[i]]<-as.data.frame(cbind(VIRGO_ID=genes.hc[[i]]$labels, gene_cluster=dtc2))
+}
+         
+saveRDS(samples.clusters, "RDS_files/samples.clusters.RDS")
+saveRDS(genes.clusters, "RDS_files/genes.clusters.RDS")
+``` 
+
+```{r SANITY CHECK sequencing coverage for each mgSs 1}
+mgSs.stats<-list()
+meta<-as.data.frame(read_excel("RDS_files/Supplemental_File_6.xlsx", skip=3))
+meta.sub<-meta[,c(1,4)]
+library(ggplot2)
+for (i in names(samples.clusters)){
+  l<-as.data.frame(ngl.abund[i])
+  l$sampleID<-rownames(ngl.abund)
+  names(l)<-c("species_coverage", "sampleID")
+  mgSs.stats[[i]]<-merge(l, samples.clusters[[i]], all.y=TRUE)
+  l<-ngl.nGenes[i]
+  l$sampleID<-rownames(l)
+  names(l)<-c("No_Genes", "sampleID")
+  mgSs.stats[[i]]<-merge(l, mgSs.stats[[i]], all.y=TRUE)
+  l<-as.data.frame(rowSums(ngl.abund))
+  l$sampleID<-rownames(ngl.abund)
+  names(l)<-c("sample_coverage", "sampleID")
+  mgSs.stats[[i]]<-merge(l, mgSs.stats[[i]], all.y=TRUE)
+  mgSs.stats[[i]]<-merge(meta.sub, mgSs.stats[[i]], all.y=TRUE)
+  mgSs.stats[[i]]$sample_cluster<-factor(mgSs.stats[[i]]$sample_cluster, levels=c(1:max(as.numeric(mgSs.stats[[i]]$sample_cluster))))
+  mgSs.stats[[i]]$species_abund<-mgSs.stats[[i]]$species_coverage/mgSs.stats[[i]]$sample_coverage
+}
+saveRDS(mgSs.stats, "RDS_files/mgSs.stats.RDS")
+
+t<-lapply(mgSs.stats, function(x) Summarize(coverage ~ as.factor(sample_cluster), data=x, digits=0))
+mgSs.stats.df<-do.call(rbind, t)
+t<-lapply(mgSs.stats, function(x) x %>% group_by(sample_cluster) %>% summarize())
+write.csv(mgSs.stats.df, "RDS_files/mgSs_coverage/mgSs.coverage.stats.csv", row.names = T, quote=F)
+
+print(ggplot(mgSs.stats[[i]], aes(x=No_Genes, y=log10(coverage), color=sample_cluster))+geom_point()+scale_color_brewer(palette="Set3")+theme_classic()+xlab("No. Genes")+ylab("log10(Coverage)")+theme(legend.position = "none")+ggtitle(i))
+print(ggsave(paste("RDS_files/mgSs_coverage/", paste(i, "subspecies_coverage_by_NoGenes.pdf", sep="_"), sep=""), width=4, height=3))
+
+print(ggplot(mgSs.stats[[i]], aes(x=as.factor(sample_cluster), y=log10(species_coverage), fill=as.factor(sample_cluster), group=as.factor(sample_cluster), color=as.factor(sample_cluster)))+geom_violin()+scale_fill_brewer(palette="Set3")+scale_color_brewer(palette="Set3")+theme_classic()+theme(legend.position = "none")+ggtitle(i)+xlab("mgSs")+ylab("log10(Coverage)")+geom_jitter(size=0.05, color="black", width=0.2))
+print(ggsave(paste("RDS_files/mgSs_coverage/", paste(i, "subspecies_coverage_boxplot.pdf", sep="_"), sep=""), width=4, height=3))
+
+for (i in names(samples.clusters)){
+  v<-mgSs.stats[[i]]
+  rownames(v)<-v$sampleID
+  v.1<-v[names(ngl.gene.counts.list.mgSs.pa.clean[[i]]),]
+  v.2<-v.1[order.dendrogram(as.dendrogram(samples.hc[[i]])),]
+  pdf(paste("RDS_files/mgSs_coverage/",paste(i, "mgCST_coverage_Barplot.pdf", sep=""), sep=""),height=0.287)
+  par(lwd=0.0026, mai=c(0,0,0,0), omi=c(0,0,0,0))
+  barplot(log10(v.2$species_coverage), cex.axis = 0.4, space = c(0,0), axes = F, col="black")
+  dev.off()
+}
+```
+
+```{r SANITY CHECK sequencing coverage for each mgSs}
+sample.cluster.stats<-list()
+meta.sub<-meta[,c(1,4)]
+library(ggplot2)
+for (i in names(samples.clusters)){
+  #l<-as.data.frame(rowSums(ngl.abund))
+  l<-as.data.frame(ngl.abund[i])
+  l$sampleID<-rownames(ngl.abund)
+  names(l)<-c("species_coverage", "sampleID")
+  sample.cluster.stats[[i]]<-merge(l, samples.clusters[[i]], all.y=TRUE)
+  l<-ngl.nGenes[i]
+  l$sampleID<-rownames(l)
+  names(l)<-c("No_Genes", "sampleID")
+  sample.cluster.stats[[i]]<-merge(l, sample.cluster.stats[[i]], all.y=TRUE)
+  l<-as.data.frame(rowSums(ngl.abund))
+  l$sampleID<-rownames(ngl.abund)
+  names(l)<-c("sample_coverage", "sampleID")
+  sample.cluster.stats[[i]]<-merge(l, sample.cluster.stats[[i]], all.y=TRUE)
+  sample.cluster.stats[[i]]<-merge(meta.sub, sample.cluster.stats[[i]], all.y=TRUE)
+  sample.cluster.stats[[i]]$sample_cluster<-factor(sample.cluster.stats[[i]]$sample_cluster, levels=c(1:max(as.numeric(sample.cluster.stats[[i]]$sample_cluster))))
+  sample.cluster.stats[[i]]$species_abund<-sample.cluster.stats[[i]]$species_coverage/sample.cluster.stats[[i]]$sample_coverage
+}
+saveRDS(sample.cluster.stats, "RDS_files/sample.cluster.stats.RDS")
+
+library(FSA)
+t<-lapply(sample.cluster.stats, function(x) Summarize(species_coverage ~ as.factor(sample_cluster), data=x, digits=0))
+sample.cluster.stats.df<-do.call(rbind, t)
+t<-lapply(sample.cluster.stats, function(x) x %>% group_by(sample_cluster) %>% summarize())
+write.csv(sample.cluster.stats.df, "RDS_files/mgSs_coverage/mgSs.coverage.stats.csv", row.names = T, quote=F)
+
+## Read in changes table - and make changes to the clusters in samples.clusters 
+changes<-read.csv("RDS_files/mgSs_coverage/mgSs.coverage.stats.updated.csv", header=TRUE)
+change.taxa<-unique(as.vector(changes[changes$Is.the.mgSs.cluster.valid. == "invalid", "Species"]))
+samples.clusters.update<-samples.clusters
+for (i in change.taxa){
+  l<-changes[changes$Species == i, ]
+  x<-changes[changes$Species == i, "Cluster.Number"]
+  z<-as.vector(changes[changes$Species == i, "mgSS.number"])
+  if("rm" %in% z){
+    samples.clusters.update[[i]]<-NULL
+  }else{
+  for (n in x){
+    y<-as.vector(l[l$Cluster.Number == n, "mgSS.number"])
+    samples.clusters.update[[i]][["sample_cluster"]]<-ifelse(samples.clusters.update[[i]][["sample_cluster"]] == n, y, samples.clusters.update[[i]][["sample_cluster"]])
+  }
+  }
+}
+saveRDS(samples.clusters.update, "RDS_files/samples.clusters.updated.RDS")
+```
+
+#Produce relative abundance table from ngl counts - updated for new iners 13jun2022
+```{r 7. Produce relative abundance table from ngl counts - updated for new iners 13jun2022}
+notIners<-as.vector(read.delim("RDS_files/NOT_Liners_Jun_10_2022.txt", header=F))
+ngl.gene.counts.list$Lactobacillus_iners<-ngl.gene.counts.list$Lactobacillus_iners[!rownames(ngl.gene.counts.list$Lactobacillus_iners) %in% notIners$V1, ]
+ngl.gene.counts.list.colSums<-lapply(ngl.gene.counts.list, function(x) as.data.frame(colSums(x)))
+library(tidyverse)
+ngl.abund<-ngl.gene.counts.list.colSums %>% map( ~ .x %>% rownames_to_column('rn')) %>% reduce(full_join, by = 'rn')
+## Run the above code first so that ngl.abund "exists" for the rename_at function in the next step 
+ngl.abund<-ngl.gene.counts.list.colSums %>% map( ~ .x %>% rownames_to_column('rn')) %>% reduce(full_join, by = 'rn') %>% rename_at(2:ncol(ngl.abund), ~ names(ngl.gene.counts.list.colSums))
+
+ngl.abund[is.na(ngl.abund)]<-0
+rownames(ngl.abund)<-ngl.abund$rn
+ngl.abund$rn<-NULL
+saveRDS(ngl.abund, "RDS_files/ngl.abund.RDS")
+
+## 
+ngl.gene.counts.list.pa<-lapply(ngl.gene.counts.list, function(x) replace(x, x >= 0.5, 1))
+ngl.gene.counts.list.pa<-lapply(ngl.gene.counts.list.pa, function(x) replace(x, x < 0.5, 0))
+ngl.gene.counts.list.colSums<-lapply(ngl.gene.counts.list.pa, as.data.frame(colSums))
+ngl.gene.counts.list.colSums<-lapply(ngl.gene.counts.list.colSums, function(x) x["sampleID"]<-rownames(x))
+
+# Make table of samples by Taxa where values are nGenes (using ngl Reads)
+library(tidyverse)
+ngl.nGenes<-ngl.gene.counts.list.colSums %>% map( ~ .x %>% rownames_to_column('rn')) %>% reduce(full_join, by = 'rn')
+## Run the above code first so that ngl.abund "exists" for the rename_at function in the next step 
+ngl.nGenes<-ngl.gene.counts.list.colSums %>% map( ~ .x %>% rownames_to_column('rn')) %>% reduce(full_join, by = 'rn') %>% rename_at(2:ncol(ngl.nGenes), ~ names(ngl.gene.counts.list.colSums))
+
+ngl.nGenes[is.na(ngl.nGenes)]<-0
+rownames(ngl.nGenes)<-ngl.nGenes$rn
+ngl.nGenes.m<-reshape2::melt(ngl.nGenes, id.vars="rn", variable.name="taxon", value.name = "Coverage")
+names(ngl.nGenes.m)[1]<-"sampleID"
+ngl.nGenes$rn<-NULL
+```
+
+#transfer mgss numbers
+```{r 8. transfer mgss numbers}
+## Make a df of samples x taxa and values are the mgSs for that sample.
+rm(test.df)
+
+li.new<-read.delim("RDS_files/new_li_clusters_Jun_14_2022.txt", header=T)
+names(li.new)[2]<-"sample_cluster"
+samples.clusters.updated$Lactobacillus_iners<-li.new
+saveRDS(samples.clusters.updated,  "RDS_files/samples.clusters.updated.RDS")
+
+test<-samples.clusters.updated
+test<-lapply(test, function(x) as.data.frame(x))
+for (i in names(test)){
+  names(test[[i]])<-c("sampleID", i)
+}
+
+for (i in names(test)){
+  if(length(table(samples.clusters.updated[[i]][,2])) > 1){
+    if (exists("test.df") == FALSE){
+      test.df<-test[[i]]
+    }else{
+      test.df<-merge(test.df, test[[i]], all=TRUE)
+    }
+  }
+}
+samples.clusters.df<-test.df ## A df of samples x taxa and values are the mgSs for that sample. 
+
+## Make the resulting dataframe numeric and replace NA w/0.. req'd prior to melting 
+rownames(samples.clusters.df)<-samples.clusters.df$sampleID
+samples.clusters.df$sampleID<-NULL
+test<-sapply(samples.clusters.df, function(x) as.numeric(x))
+samples.clusters.num.df<-as.data.frame(test)
+samples.clusters.num.df$sampleID<-test.df$sampleID
+samples.clusters.num.df[is.na(samples.clusters.num.df)]<-0
+
+## Make melted dataframe of sample ID to taxon to ss# 
+samples.clusters.num.df.m<-reshape2::melt(samples.clusters.num.df, id.vars=c("sampleID"), variable.name="taxon", value.name="ss")
+samples.clusters.num.df.m$MG_ss<-paste(samples.clusters.num.df.m$taxon, samples.clusters.num.df.m$ss, sep="_")
+
+samples.clusters.num.df.m.d<-reshape2::dcast(samples.clusters.num.df.m, sampleID~MG_ss, value.var = "MG_ss", length)
+n<-samples.clusters.num.df.m.d$sampleID
+
+# samples.clusters.num.df.m.d<-as.data.frame(samples.clusters.num.df.m.d[-1] <- +(samples.clusters.num.df.m.d[-1] > 0))
+# samples.clusters.num.df.m.d[is.na(samples.clusters.num.df.m.d)]<-0
+# samples.clusters.num.df.m.d.50<-samples.clusters.num.df.m.d
+# rownames(samples.clusters.num.df.m.d.50)<-n
+
+ngl.abund$sampleID<-rownames(ngl.abund)
+ngl.abund.m<-reshape2::melt(ngl.abund, id.vars="sampleID", variable.name="taxon", value.name="abundance")
+ngl.abund$sampleID<-NULL
+ngl.abund.m$sam_tax<-paste(ngl.abund.m$sampleID, ngl.abund.m$taxon, sep="_")
+samples.clusters.num.df.m$sam_tax<-paste(samples.clusters.num.df.m$sampleID, samples.clusters.num.df.m$taxon, sep="_")
+
+ngl.abund.clusters<-merge(ngl.abund.m, samples.clusters.num.df.m, all=TRUE)
+ngl.abund.clusters[is.na(ngl.abund.clusters)]<-0
+ngl.abund.clusters$MG_ss<-ifelse(ngl.abund.clusters$MG_ss == "0", as.character(ngl.abund.clusters$taxon), as.character(ngl.abund.clusters$MG_ss))
+
+ngl.abund.clusters<-merge(ngl.abund.clusters, ngl.nGenes.m, all.x=TRUE)
+ngl.abund.clusters$nGenes[is.na(ngl.abund.clusters$nGenes)]<-0
+
+## Remove base taxa names that have been made into ss
+list.of.ss.taxa<-as.vector(unique(ngl.abund.clusters[ngl.abund.clusters$ss == 1, 2]))
+test<-ngl.abund.clusters
+ngl.abund.clusters$MG_ss<-ifelse(ngl.abund.clusters$taxon %in% list.of.ss.taxa, yes = paste(ngl.abund.clusters$taxon, ngl.abund.clusters$ss, sep="_"),no=as.character(ngl.abund.clusters$MG_ss))
+
+ngl.abund.clusters.cast<-reshape2::dcast(ngl.abund.clusters, sampleID~MG_ss, value.var = "abundance")
+ngl.abund.clusters.cast[is.na(ngl.abund.clusters.cast)]<-0
+rownames(ngl.abund.clusters.cast)<-ngl.abund.clusters.cast$sampleID
+ngl.abund.clusters.cast$sampleID<-NULL
+ngl.abund.clusters.cast<-ngl.abund.clusters.cast[, colSums(ngl.abund.clusters.cast) > 0]
+ngl.abund.clusters.cast<-ngl.abund.clusters.cast[rowSums(ngl.abund.clusters.cast) > 0, ]
+
+saveRDS(ngl.abund.clusters.cast, "RDS_files/ngl.abund.clusters.cast.RDS")
+saveRDS(samples.clusters.num.df, "RDS_files/samples.clusters.num.df.RDS")
+saveRDS(samples.clusters.num.df.m.cc, "RDS_files/samples.clusters.num.df.m.cc.RDS")
+```
+
+#Make mgCSTs & official mgCST tables 
+```{r 9. Make mgCSTs & official mgCST tables }
+## Remove taxa in which most hits go to a few genes, and these genes have bestblast matches (nr/nt) to human
+ngl.abund.clusters.cast$Burkholderia_mallei<-NULL
+ngl.abund.clusters.cast$Coprobacillus_sp.<-NULL
+ngl.abund.clusters.cast$Enterococcus_faecium<-NULL
+ngl.abund.clusters.cast$Beggiatoa_sp.<-NULL
+ngl.abund.clusters.cast$Candidatus_Pelagibacter<-NULL
+ngl.abund.clusters.cast<-ngl.abund.clusters.cast[colSums(ngl.abund.clusters.cast) > 0, ]
+## Remove those samples that were dominated by the above taxa (mgCST27)
+#ngl.abund.clusters.cast<-ngl.abund.clusters.cast[!rownames(ngl.abund.clusters.cast) %in% mgCST27, ]
+relabund<-ngl.abund.clusters.cast/rowSums(ngl.abund.clusters.cast) ### Currently does not include reads from non-mgss species. How to add? 
+mgCST.dist<-philentropy::JSD(as.matrix(relabund))
+#saveRDS(mgCST.dist, "RDS_files/mgCST.dist.RDS")
+
+rownames(mgCST.dist)<-rownames(relabund)
+colnames(mgCST.dist)<-rownames(relabund)
+mgCST.hclust <- hclust(as.dist(mgCST.dist), method="ward")
+
+#saveRDS(mgCST.hclust, "RDS_files/mgCST.hclust.RDS")
+#dtc<-dynamicTreeCut::cutreeDynamic(mgCST.hclust, distM = mgCST.dist, method="hybrid", minClusterSize = 10, deepSplit = TRUE)
+dtc<-cutree(mgCST.hclust, k=26)
+table(dtc)
+
+dtc.df<-as.data.frame(dtc)
+dtc.df$sampleID<-rownames(dtc.df)
+
+mgCSTs.samples<-cbind(dtc.df, domTaxa=colnames(relabund)[max.col(relabund, ties.method="first")], relabund=apply(relabund, 1, max))
+mgCSTs<-as.data.frame(mgCSTs.samples %>% group_by(dtc) %>% dplyr::summarise(meanRelabund=mean(relabund)))
+mgCSTs$domTaxa<-as.data.frame(mgCSTs.samples %>% count(dtc, domTaxa) %>% group_by(dtc) %>% slice(which.max(n)))[,2]
+
+for.sort<-c("Lactobacillus_crispatus", "Lactobacillus_gasseri", "Lactobacillus_iners", "Lactobacillus_jensenii", "BVAB1", "Gardnerella_vaginalis", "Bifidobacterium_breve")
+mgCSTs$domTaxa<-as.character(mgCSTs$domTaxa)
+
+v<-vector()
+for (i in for.sort){
+  v<-append(v, sort(as.vector(mgCSTs[grepl(pattern = i, x = mgCSTs$domTaxa), "domTaxa"])))
+}
+
+mgCSTs.sort<-mgCSTs[pmatch(v, mgCSTs$domTaxa), ]
+mgCSTs.sort$mgCST<-c(1:26)
+
+mgCST<-as.data.frame(rbind(c("1", "#FE0308"),c("2", "#F54C5E"), c("3", "#F07084"), c("4", "#EC94A5"),c("5", "#F0BCCC"),c("6", "#F6D3DA"),c("7", "#86C61A"), c("8", "#B4DB29"),c("9", "#DBEA77"), c("10", "#FF7200"), c("11", "#F68A11"),c("12", "#F8A40E"),c("13", "#F3BC11"),c("14", "#f7d15a"), c("15", "#FAE50D"),c("16", "#F3F46E"),c("17", "#448A73"),c("18", "#89BEAB"), c("19", "#BCD6CD"),c("20", "#221886"),c("21", "#3E3792"),c("22", "#5D579E"),c("23", "#7C76AC"),c("24", "#9A98BF"),c("25", "#C9C8D8"),c("26", "#98C999"), c("27", "#989898"), c("", "white"), c("NA", "white")))
+names(mgCST)<-c("mgCST", "color")
+
+mgCSTs.sort$color<-mgCST[match(mgCSTs.sort$mgCST, mgCST$mgCST), "color"]
+mgCSTs.samples<-merge(mgCSTs.samples, mgCSTs.sort[,c("dtc", "mgCST", "color")], all.x=TRUE)
+
+## identify mgcst 27 by samples which don't have a dominant taxon already named. These were already clustered in dtc 6 - but some do have dominant taxa with mgcst - relabel these and then rename the remainder as mgcst 27 (grey)
+for(i in mgCSTs.samples[mgCSTs.samples$dtc == 6, "sampleID"]){
+  l<-mgCSTs.samples[mgCSTs.samples$sampleID == i, ]
+  mgCSTs.samples[mgCSTs.samples$sampleID == i, "mgCST"]<-ifelse(l$domTaxa %in% as.vector(mgCSTs.sort$domTaxa), mgCSTs.sort[mgCSTs.sort$domTaxa %in% l$domTaxa, "mgCST"], 27)
+  mgCSTs.samples[mgCSTs.samples$sampleID == i, "color"]<-ifelse(l$domTaxa %in% as.vector(mgCSTs.sort$domTaxa), mgCSTs.sort[mgCSTs.sort$domTaxa %in% l$domTaxa, "color"], "#989898")
+}
+
+saveRDS(mgCSTs, "RDS_files/mgCSTs.RDS")
+saveRDS(mgCSTs.samples, "RDS_files/mgCSTs.samples.RDS")
+```
+
+#mgCST Heatmap
+```{r 10. mgCST Heatmap}
+## order relabund table by most abundant taxon plus mgss's
+#ngl.abund.clusters.cast<-readRDS("RDS_files/ngl.abund.clusters.cast.RDS")
+relabund<-ngl.abund.clusters.cast/rowSums(ngl.abund.clusters.cast)
+test<-names(relabund[order(colSums(relabund), decreasing = TRUE)])
+test.s<- unique(substr(test,1,nchar(test)-2))
+taxon.order<-c()
+for (i in test.s)
+{
+  l<-names(relabund[grep(pattern = i, names(relabund))])
+  taxon.order<-append(taxon.order, l, after = length(taxon.order))
+}
+taxon.order<-unique(taxon.order)
+relabund.s<-relabund[taxon.order]
+l<-as.vector(table(sort(as.numeric(mgCST.hclust$order))))
+#l<-prepend(0, l)
+n<-cumsum(l)
+colfunc <- colorRampPalette(c("khaki", "limegreen", "darkslategray1", "mediumblue", "magenta", "red"))
+names(relabund.s)<-gsub(x=names(relabund.s), pattern = "_", replacement = " ")
+
+pdf("RDS_files//mgCST_heatmap_test.pdf", width=7, height=10)
+gplots::heatmap.2(t(as.matrix(relabund.s[,1:80])), Colv = as.dendrogram(mgCST.hclust), Rowv = FALSE, col=colfunc(100), labRow = NULL, labCol = FALSE, keysize= 1.0, densadj=0, density.info='none', key = FALSE, key.ylab=NA, key.title=NA, key.ytickfun=NA, key.xlab="Relative Abundance", trace="none", cexRow = 0.5, cexCol = 0.1, adjRow = c(1, NA), offsetRow = -38, dendrogram = "column", main = paste("mgCSTs JSD, Ward linkage HC, nSamples=", paste(nrow(relabund))), ColSideColors = mgCSTs.samples[match(rownames(relabund.s), mgCSTs.samples$sampleID), "color"], title(main = paste("mgCSTs JSD, Ward linkage HC, nSamples=", paste(nrow(relabund))), line = -2))
+dev.off()
+
+z<-rownames(relabund)
+z.1<-z[order.dendrogram(as.dendrogram(mgCST.hclust))]
+rownames(mgCSTs.samples)<-mgCSTs.samples$sampleID
+mgCSTs.samples<-mgCSTs.samples[z.1,]
+mgCSTs.samples<-mgCSTs.samples[order(mgCSTs.samples$mgCST),]
+relabund.s<-relabund[mgCSTs.samples$sampleID, taxon.order]
+#relabund.s<-relabund.s[order(mgCSTs.samples$mgCST),]
+l<-as.vector(table(mgCSTs.samples$mgCST))
+#l<-prepend(0, l)
+n<-cumsum(l)
+
+pdf("RDS_files/mgCST_heatmap_test_sorted.pdf", width=7, height=10)
+gplots::heatmap.2(t(as.matrix(relabund.s[,1:57])), Colv = FALSE, Rowv = FALSE, col=colfunc(100), labRow = NULL, labCol = FALSE, keysize= 1.0, densadj=0, density.info='none', key = FALSE, key.ylab=NA, key.title=NA, key.ytickfun=NA, key.xlab="Relative Abundance", trace="none", cexRow = 0.5, cexCol = 0.1, adjRow = c(1, NA), offsetRow = -38,main = paste("mgCSTs JSD, Ward linkage HC, nSamples=", paste(nrow(relabund))), ColSideColors = mgCSTs.samples[match(rownames(relabund.s), mgCSTs.samples$sampleID), "color"])
+dev.off()
+```
+
+```{r Plot Nugent pH Ethnicity heatmap ColSideColors}
+mgCSTs.samples.meta<-merge(meta, mgCSTs.samples, all=TRUE)
+
+#nug.col<-colorRampPalette(c("gray", "red"))
+#nug.col.Tbl<-nug.col(length(sort(unique(mgCSTs.samples.meta$Nugent))))
+mgCSTs.samples.meta$nug_cat<-cut(mgCSTs.samples.meta$Nugent, breaks=c(0,4,7,11), labels=c("0-3", "4-6", "7-10"), right = FALSE)
+nug.col.Tbl<-c("slategray4", "slategray1", "red")
+
+pdf("RDS_files/mgCST_heatmap_noDend_NUGENT_test.pdf", width=7, height=10)
+gplots::heatmap.2(t(as.matrix(relabund.s[,1:80])), Colv = FALSE, Rowv = FALSE, col=colfunc(100), labRow = NULL, labCol = FALSE, keysize= 1.0, densadj=0, density.info='none', key = FALSE, key.ylab=NA, key.title=NA, key.ytickfun=NA, key.xlab="Relative Abundance", trace="none", cexRow = 0.5, cexCol = 0.1, adjRow = c(1, NA), offsetRow = -38,main = paste("mgCSTs JSD, Ward linkage HC, nSamples=", paste(nrow(relabund))), ColSideColors = nug.col.Tbl[as.factor(mgCSTs.samples.meta[match(rownames(relabund.s), mgCSTs.samples.meta$sampleID), "nug_cat"])])
+dev.off()
+
+ph.col<-colorRampPalette(c("magenta", "lightseagreen"))
+ph.col.Tbl<-ph.col(length(sort(unique(mgCSTs.samples.meta$pH))))
+
+pdf("RDS_files/mgCST_heatmap_noDend_pH_test.pdf", width=7, height=10)
+gplots::heatmap.2(t(as.matrix(relabund.s[,1:80])), Colv = FALSE, Rowv = FALSE, col=colfunc(100), labRow = NULL, labCol = FALSE, keysize= 1.0, densadj=0, density.info='none', key = TRUE, key.ylab=NA, key.title=NA, key.ytickfun=NA, key.xlab="Relative Abundance", trace="none", cexRow = 0.5, cexCol = 0.1, adjRow = c(1, NA), offsetRow = -38,main = paste("mgCSTs JSD, Ward linkage HC, nSamples=", paste(nrow(relabund))), ColSideColors = ph.col.Tbl[as.factor(mgCSTs.samples.meta[match(rownames(relabund.s), mgCSTs.samples.meta$sampleID), "pH"])])
+dev.off()
+
+ethn.col.Tbl<-RColorBrewer::brewer.pal(length(sort(unique(mgCSTs.samples.meta$Race))),"Set1")
+
+pdf("RDS_files/mgCST_heatmap_noDend_Ethnicity_test.pdf", width=7, height=10)
+gplots::heatmap.2(t(as.matrix(relabund.s[,1:5])), Colv = FALSE, Rowv = FALSE, col=colfunc(100), labRow = NULL, labCol = FALSE, keysize= 1.0, densadj=0, density.info='none', key = TRUE, key.ylab=NA, key.title=NA, key.ytickfun=NA, key.xlab="Relative Abundance", trace="none", cexRow = 0.5, cexCol = 0.1, adjRow = c(1, NA), offsetRow = -38,main = paste("mgCSTs JSD, Ward linkage HC, nSamples=", paste(nrow(relabund))), ColSideColors = ethn.col.Tbl[as.factor(mgCSTs.samples.meta[match(rownames(relabund.s), mgCSTs.samples.meta$sampleID), "Race"])])
+legend("topright", legend = sort(unique(mgCSTs.samples.meta$Race)), col = ethn.col.Tbl, lty= 1, lwd = 5, cex=.7, bty="n", title = "Ethnicity Key", ncol=2)
+dev.off()
+
+pdf("RDS_files/mgCST_heatmap_noDend_Ethnicity.pdf", width=7, height=10)
+gplots::heatmap.2(t(as.matrix(relabund.s[,1:5])), Colv = FALSE, Rowv = FALSE, col=colfunc(100), labRow = NULL, labCol = FALSE, keysize= 1.0, densadj=0, density.info='none', key = TRUE, key.ylab=NA, key.title=NA, key.ytickfun=NA, key.xlab="Relative Abundance", trace="none", cexRow = 0.5, cexCol = 0.1, adjRow = c(1, NA), offsetRow = -38,main = paste("mgCSTs JSD, Ward linkage HC, nSamples=", paste(nrow(relabund))), ColSideColors = ethn.col.Tbl[as.factor(mgCSTs.samples.meta[match(rownames(relabund.s), mgCSTs.samples.meta$sampleID), "Race"])])
+legend("topright", legend = sort(unique(mgCSTs.samples.meta$Race)), col = ethn.col.Tbl, lty= 1, lwd = 5, cex=.7, bty="n", title = "Ethnicity Key", ncol=2)
+dev.off()
+
+install.packages("wesanderson")
+library(wesanderson)
+study.col.Tbl<-c(wesanderson::wes_palette(n=4, name = "Moonrise2"), wesanderson::wes_palette(n=5, name = "Darjeeling1"))
+pdf("RDS_files/mgCST_heatmap_noDend_Study.pdf", width=7, height=10)
+gplots::heatmap.2(t(as.matrix(relabund.s[,1:5])), Colv = FALSE, Rowv = FALSE, col=colfunc(100), labRow = NULL, labCol = FALSE, keysize= 1.0, densadj=0, density.info='none', key = TRUE, key.ylab=NA, key.title=NA, key.ytickfun=NA, key.xlab="Relative Abundance", trace="none", cexRow = 0.5, cexCol = 0.1, adjRow = c(1, NA), offsetRow = -38,main = paste("mgCSTs JSD, Ward linkage HC, nSamples=", paste(nrow(relabund))), ColSideColors = study.col.Tbl[as.factor(mgCSTs.samples.meta[match(rownames(relabund.s), mgCSTs.samples.meta$sampleID), "Project"])])
+legend("topright", legend = sort(unique(mgCSTs.samples.meta$Project)), col = study.col.Tbl, lty= 1, lwd = 5, cex=.7, bty="n", title = "Study Key", ncol=2)
+dev.off()
+```
+
+```{r Alpha Diversity & Coverage Histograms}
+library(vegan)
+sDiv<-as.data.frame(diversity(ngl.abund.clusters.cast))
+rownames(sDiv)<-rownames(ngl.abund.clusters.cast)
+sDiv$sampleID<-rownames(sDiv)
+names(sDiv)<-c("Shannon", "sampleID")
+mgCSTs.samples.meta<-merge(sDiv, mgCSTs.samples.meta, all=TRUE)
+sDiv.sort<-as.data.frame(sDiv[rownames(relabund.s), ])
+
+pdf("RDS_files/mgCST_shannon_Barplot.pdf",height=0.287)
+par(lwd=0.0026, mai=c(0,0,0,0), omi=c(0,0,0,0))
+barplot(sDiv.sort$Shannon, cex.axis = 0.4, space = c(0,0), axes = F, col="black")
+dev.off()
+
+sDiv.sort.mgCST<-merge(sDiv.sort, mgCSTs.samples, all=TRUE)
+mgCST.alpha<-sDiv.sort.mgCST %>% group_by(mgCST) %>% summarise(median=median(Shannon), IQR=IQR(Shannon))
+mgCSTs.sort<-merge(mgCSTs.sort, mgCST.alpha, by="mgCST", all=TRUE)
+write.csv(mgCSTs.sort, "mgCSTs.csv", quote=F, row.names = F)
+
+rownames(mgCSTs.samples)<-mgCSTs.samples$sampleID
+mgCSTs.samples<-mgCSTs.samples[rownames(relabund.s), ]
+pdf("RDS_files/mgCST_coverage_Barplot.pdf",height=0.287)
+par(lwd=0.0026, mai=c(0,0,0,0), omi=c(0,0,0,0))
+barplot(log10(mgCSTs.samples$Coverage), cex.axis = 0.4, space = c(0,0), axes = F, col="black")
+dev.off()
+```
+
+
+
+
