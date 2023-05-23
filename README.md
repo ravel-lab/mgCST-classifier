@@ -10,8 +10,8 @@ When used in concert with the vaginal non-redundant gene database (VIRGO), assig
 This script *requires* VIRGO output files "summary.Abundance.txt" and "summary.NR.abundance.txt" as well as VIRGO reference file 0.geneLength.txt.
 
   1. Clone this repository
-  2. Download the metagenomic subspecies random forest classifier from https://figshare.com/ndownloader/files/36123449 and place in the github repository directory. 
-  3. Run data through VIRGO (https://virgo.igs.umaryland.edu).
+  2. Run data through VIRGO (https://virgo.igs.umaryland.edu).
+  3. Download the metagenomic subspecies random forest classifier from https://figshare.com/ndownloader/files/36123449 and place in the github repository directory. 
   4. Run classifier. The classifier will first assign metagenomic subspecies using the mgss_classifier.RDS file downloaded from figshare. It will then assign metagenomic CSTs to each sample using a nearest-neighbor, centroid-based classifier. 
 
 Full paths to the following files/directories must be supplied in this order:<br>
