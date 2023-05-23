@@ -1,7 +1,13 @@
 #!/usr/bin/env Rscript
 
+## packages
+if (!require(randomForestSRC, quietly = TRUE)) install.packages("randomForestSRC", quiet = TRUE)
+require(randomForestSRC)
+if (!require(gplots, quietly = TRUE, warn.conflicts = FALSE)) install.packages("gplots", quiet = TRUE)
+
+## 
 args = commandArgs(trailingOnly=TRUE)
-#args<-c("~/Dropbox (IGS)/mgss_mcst_devel/mgCST\ classifier/VIRGO-master/mgCST_classifier/LSVF/summary.Abundance.txt", "~/Dropbox (IGS)/mgss_mcst_devel/mgCST\ classifier/VIRGO-master/mgCST_classifier/LSVF/summary.NR.abundance.txt", "~/Dropbox (IGS)/mgss_mcst_devel/mgCST\ classifier/VIRGO-master/", "~/Dropbox (IGS)/MSL/VALENCIA-master/mgCST_centroids_22Jun2022.csv")
+#args<-c("~/Dropbox (IGS)/MSL/MLAWI/MG processing/summary.Abundance.txt", "~/Dropbox (IGS)/MSL/MLAWI/MG processing/summary.NR.abundance.txt", "/Users/johannaholm/bin/VIRGO-master/", "/Users/johannaholm/bin/mgCST_classifier/")
 wd<-getwd()
 
 # test if there is at least one argument: if not, return an error
@@ -34,28 +40,27 @@ bvab1.col<-which(names(counts.mgss) %in% "BVAB1")
 names(counts.mgss)[bvab1.col]<-"Ca._Lachnocurva_vaginae"
 counts.mgss.ngl<-counts.mgss
 counts.genes<-as.data.frame(read.delim(args[2], header = TRUE, check.names = FALSE))
+names(counts.genes)[1]<-"VIRGO_ID"
 gene.length<-as.data.frame(read.delim(paste(args[3], "/1_VIRGO/", "0.geneLength.txt", sep=""), header = FALSE))
-names(gene.length)<-c("PC","Length")
+names(gene.length)<-c("VIRGO_ID","Length")
 taxon.tbl<-as.data.frame(read.delim(paste(args[4], "/1.taxon.tbl_Jun_20_2022.txt", sep=""), header = FALSE))
-names(taxon.tbl)<-c("cluster", "PC", "Taxa", "Length")
+names(taxon.tbl)<-c("VOG", "VIRGO_ID", "Taxa", "Length")
 
 ## format gene table
-genes<-merge(gene.length, taxon.tbl[,c("PC", "Taxa")], all=TRUE, by="PC")
-genes<-merge(genes, counts.genes, all.y=TRUE, by="PC")
+genes<-merge(gene.length, taxon.tbl[,c("VIRGO_ID", "Taxa")], all=TRUE, by="VIRGO_ID")
+genes<-merge(genes, counts.genes, all.y=TRUE, by="VIRGO_ID")
 
 a<-which(names(genes) %in% "Taxa")
 a<-a+1
 genes.ngl<-genes
 genes.ngl[,a:ncol(genes.ngl)]<-apply(genes[,a:ncol(genes)], 2, function(x) x*150/genes[["Length"]])
-#write.csv(genes.ngl, paste(wd, "/norm_counts_", today2, ".csv", sep=""), quote=F)
+write.csv(genes.ngl, paste(wd, "/norm_counts_genes_", today2, ".csv", sep=""), quote=F, row.names = F)
 
 ## Make gene table presence/absence
 genes.ngl.pa<-genes
 genes.ngl.pa[,a:ncol(genes.ngl.pa)]<-apply(genes[,a:ncol(genes)], 2, function(x) ifelse(x*150/genes[["Length"]] >= 0.5, 1, 0))
 
 
-if (!require(randomForestSRC, quietly = TRUE)) install.packages("randomForestSRC", quiet = TRUE)
-require(randomForestSRC)
 
 ## classify mgss
 for (taxon in names(counts.mgss[names(counts.mgss) %in% names(mgss.classifiers)])){
@@ -66,7 +71,7 @@ for (taxon in names(counts.mgss[names(counts.mgss) %in% names(mgss.classifiers)]
   ## rename base taxon to be taxon_0
   names(counts.mgss.ngl)[names(counts.mgss.ngl) %in% taxon]<-paste(taxon, 0, sep="_")
   ## capture samples with too few species genes to qualify for mgss
-  samples.for.0<-rownames(table)[rowSums(table) < 750]
+  samples.for.0<-rownames(table)[rowSums(table) < 500] ## This number needs to be considered for low-coverage MGs.. how accurate is mgSs assignment if enough genes aren't present? How much are mgSs dependent on gene number?
   ## make gene count table match format of classifier
   if(length(samples.for.0) < nrow(table)){ ## if there are any samples with enough genes to classify mgss:
     for(gene in mgss.classifiers[[taxon]]$xvar.names){
@@ -131,8 +136,7 @@ yue_distance<-function(row, median){
 }
 
 ## read in reference centroids
-cent<-list.files(path=args[4], pattern="centroids", full.names = TRUE)
-reference_centroids<-as.data.frame(read.csv(cent, header = TRUE, row.names = 1))
+reference_centroids<-as.data.frame(read.csv(paste(args[4], "/mgCST_centroids_22Jun2022.csv", sep=""), header = TRUE, row.names = 1))
 ## make relabund table fresh
 relabund<-counts.mgss.ngl/rowSums(counts.mgss.ngl)
 ## reformat relabund to include all expected column names (xvar.names)
@@ -165,7 +169,6 @@ relabund.mgCST<-relabund.mgCST[order(as.numeric(relabund.mgCST[["mgCST"]])),]
 relabund.mgCST[["color"]]<-mgCST[match(relabund.mgCST[["mgCST"]], mgCST$mgCST), "color"]
 names(relabund.mgCST)<-gsub("_", " ", names(relabund.mgCST))
 
-if (!require(gplots, quietly = TRUE, warn.conflicts = FALSE)) install.packages("gplots", quiet = TRUE)
 pdf(paste(wd, "/mgCST_heatmap_", today2, ".pdf", sep=""), width=7, height=10)
 gplots::heatmap.2(t(as.matrix(relabund.mgCST[,1:50])), Colv = FALSE, Rowv = FALSE, col=colfunc(100), keysize= 1.0, densadj=0, density.info='none', key = TRUE, key.ylab=NA, key.title=NA, key.ytickfun=NA, key.xlab="Relative Abundance", trace="none", cexRow = 0.7, cexCol = 0.1, adjRow = c(1, NA),offsetRow = -38,  main = paste("mgCST Heatmap\nnSamples=", paste(nrow(relabund))), title(main = paste("mgCST Heatmap\nnSamples=", paste(nrow(relabund))), line = -2), ColSideColors = as.vector(relabund.mgCST[["color"]]), lhei = c(1,7), dendrogram = "none")
 dev.off()
