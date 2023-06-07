@@ -1,0 +1,27 @@
+
+## Process PRJNA576566 through VIRGO
+ls /local/groupshare/ravel/mfrance/small_projects/BIGEO/Chinese/01_preprocess/2_fastq_se/ > /local/scratch/jholm/mgCST_paper/PRJNA576566/samples.lst
+while read -r PART; do qsub -b y -l mem_free=5G -P jravel-lab -q threaded.q -pe thread 32 -V -cwd -o /local/scratch/jholm/mgCST_paper/PRJNA576566/${PART/.gz} gunzip -cf /local/groupshare/ravel/mfrance/small_projects/BIGEO/Chinese/01_preprocess/2_fastq_se/$PART ; done<samples.lst
+cd PRJNA576566
+ls *.fq > samples.lst 
+while read -r PART; do qsub -b y -l mem_free=5G -P jravel-lab -q threaded.q -pe thread 32 -V -cwd /local/projects/M8910/VOG_demo/3_run_VIRGO/runMapping.step1.sh -r $PART -p ${PART/.se.fq} -d /local/projects/M8910/VOG_demo/; done<samples.lst
+/local/projects/M8910/VOG_demo/3_run_VIRGO/runMapping.step2.sh -p temp_mapping/ -d /local/projects/M8910/VOG_demo/
+Rscript ~/bin/mgCST_classifier/classify_mgCST_centroid.R summary.Abundance.txt summary.NR.abundance.txt /Users/johannaholm/bin/VIRGO-master/ /Users/johannaholm/bin/mgCST_classifier/
+
+## Process PRJNA779415 through VIRGO
+ls /local/groupshare/ravel/mfrance/MMOTH/02_preprocess/2_fastq_se/ > /local/scratch/jholm/mgCST_paper/PRJNA779415/samples.lst
+while read -r PART; do qsub -b y -l mem_free=5G -P jravel-lab -q threaded.q -pe thread 32 -V -cwd -o /local/scratch/jholm/mgCST_paper/PRJNA779415/${PART/.gz} gunzip -cf /local/groupshare/ravel/mfrance/MMOTH/02_preprocess/2_fastq_se/$PART ; done<samples.lst
+cd PRJNA779415
+ls *.fq > samples.lst 
+while read -r PART; do qsub -b y -l mem_free=5G -P jravel-lab -q threaded.q -pe thread 32 -V -cwd /local/projects/M8910/VOG_demo/3_run_VIRGO/runMapping.step1.sh -r $PART -p ${PART/.se.fq} -d /local/projects/M8910/VOG_demo/; done<samples.lst
+/local/projects/M8910/VOG_demo/3_run_VIRGO/runMapping.step2.sh -p temp_mapping/ -d /local/projects/M8910/VOG_demo/
+Rscript ~/bin/mgCST_classifier/classify_mgCST_centroid.R summary.Abundance.txt summary.NR.abundance.txt /Users/johannaholm/bin/VIRGO-master/ /Users/johannaholm/bin/mgCST_classifier/
+
+## Process PRJEB34536 through VIRGO
+ls /local/groupshare/ravel/mfrance/small_projects/BIGEO/Irish/01_preprocess/2_fastq_se/ > /local/scratch/jholm/mgCST_paper/PRJEB34536/samples.lst
+while read -r PART; do qsub -b y -l mem_free=5G -P jravel-lab -q threaded.q -pe thread 32 -V -cwd -o /local/scratch/jholm/mgCST_paper/PRJEB34536/${PART/.gz} gunzip -cf /local/groupshare/ravel/mfrance/small_projects/BIGEO/Irish/01_preprocess/2_fastq_se/$PART ; done<samples.lst
+cd PRJEB34536
+ls *.fq > samples.lst 
+while read -r PART; do qsub -b y -l mem_free=5G -P jravel-lab -q threaded.q -pe thread 32 -V -cwd /local/projects/M8910/VOG_demo/3_run_VIRGO/runMapping.step1.sh -r $PART -p ${PART/.se.fq} -d /local/projects/M8910/VOG_demo/; done<samples.lst
+/local/projects/M8910/VOG_demo/3_run_VIRGO/runMapping.step2.sh -p temp_mapping/ -d /local/projects/M8910/VOG_demo/
+Rscript ~/bin/mgCST_classifier/classify_mgCST_centroid.R summary.Abundance.txt summary.NR.abundance.txt /Users/johannaholm/bin/VIRGO-master/ /Users/johannaholm/bin/mgCST_classifier/
