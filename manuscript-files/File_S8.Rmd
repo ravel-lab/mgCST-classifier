@@ -49,7 +49,7 @@ require(data.table)
 # Read in data
 ```{r}
 getwd()
-mgCSTs.samples.meta<-as.data.frame(read_excel("RDS_files/Supplemental_File_6.xlsx", skip = 3, na = c("NA", "#N/A")))
+mgCSTs.samples.meta<-as.data.frame(read_excel("RDS_files/File_S6.xlsx", skip = 3, na = c("NA", "#N/A")))
 ngl.abund<-readRDS("RDS_files/ngl.abund.RDS") ## The abundance of each species in a sample, normalized for gene length
 ngl.nGenes<-readRDS("RDS_files/ngl.nGenes.RDS") ## The number of genes of each species in a sample, normalized for gene length
 ngl.abund.clusters.cast<-readRDS("RDS_files/ngl.abund.clusters.cast.RDS") ## The abundance of each mgSs in a sample
@@ -72,7 +72,7 @@ gv.sp.mgss.genes<-readRDS("RDS_files/gv.sp.mgss.genes.RDS")
 ## Random Forest classifier for mgSS
 ```{r randomClassifier for all mgSS, 10Fold CV}
 names(ngl.gene.counts.list.mgSs.pa.clean)[3]<-"Ca._Lachnocurva_vaginae"
-names(samples.clusters)[5]<-"Ca._Lachnocurva_vaginae"
+names(samples.clusters.updated)[5]<-"Ca._Lachnocurva_vaginae"
 
 nReads<-colSums(all.clean.100k)
 
@@ -82,11 +82,11 @@ tuning<-list()
 for (i in c("Lactobacillus_crispatus", "Lactobacillus_gasseri", "Lactobacillus_jensenii", "Lactobacillus_iners", "Ca._Lachnocurva_vaginae")){
   #the.genes<-names(as.data.frame(t(ngl.gene.counts.list.mgSs.pa.clean[[i]])))
   the.data<-as.data.frame(t(ngl.gene.counts.list.mgSs.pa.clean[[i]]))
-  if(i %in% "Gardnerella_vaginalis"){
+  if(i %in% c("Gardnerella_vaginalis", "Prevotella_bivia", "Megasphaera_genomosp.", "Lactobacillus_iners", "Lactobacillus_crispatus", "Atopobium_vaginae"){
     the.data<-as.data.frame(t(ngl.gene.counts.list.mgSs.pa.clean[[i]][,colnames(ngl.gene.counts.list.mgSs.pa.clean[[i]]) %in% names(nReads[nReads > 1000000])]))
   }
   #the.data<-the.data[,the.genes]
-  sample.clusters1<-samples.clusters[[i]]
+  sample.clusters1<-samples.clusters.updated[[i]]
   the.data<-the.data[, colSums(the.data) > min(table(sample.clusters1[["sample_cluster"]]))]
   the.data[["mgss"]]<-as.vector(sample.clusters1[match(rownames(the.data), sample.clusters1$sampleID), "sample_cluster"])
   the.data<-the.data[!the.data$mgss %in% "untyped", ]
@@ -106,7 +106,7 @@ for (i in c("Lactobacillus_crispatus", "Lactobacillus_gasseri", "Lactobacillus_j
       nsplit = 1, stepFactor = 1.25, improve = 1e-3, strikeout = 3, maxIter = 25,
       trace = FALSE, doBest = TRUE)
   }
-  saveRDS(tuning, paste("RDS_files/", i, "_fineTuning.RDS", sep=""))
+  saveRDS(tuning, paste(i, "_fineTuning.RDS", sep=""))
 }
 
 ggplot(li.tune.df[li.tune.df$nodesize==1,], aes(y=err, x=mtry))+geom_point()+ylab("Rate of Classification Error")+xlab("mtry")+ggtitle("L. iners Tuning mtry, nodesize=1")+theme_bw()
@@ -122,12 +122,12 @@ predicted<-list()
 set.seed(123)
 mgss.cv<-data.frame()
 #Perform 10 fold cross validation for each mgSs.
-for(i in names(samples.clusters)){
+for(i in names(samples.clusters.updated)[28:30]){
   the.data<-as.data.frame(t(ngl.gene.counts.list.mgSs.pa.clean[[i]]))
-  if(i %in% "Gardnerella_vaginalis"){
-    the.data<-as.data.frame(t(ngl.gene.counts.list.mgSs.pa.clean[[i]][,colnames(ngl.gene.counts.list.mgSs.pa.clean[[i]]) %in% names(nReads[nReads > 1000000])]))
+  if(i %in% c("Gardnerella_vaginalis", "Prevotella_bivia", "Megasphaera_genomosp.", "Lactobacillus_iners", "Lactobacillus_crispatus", "Atopobium_vaginae")){
+    the.data<-as.data.frame(t(ngl.gene.counts.list.mgSs.pa.clean[[i]][,colnames(ngl.gene.counts.list.mgSs.pa.clean[[i]]) %in% names(nReads[nReads > 5.5e5])]))
   }
-  sample.clusters1<-samples.clusters[[i]]
+  sample.clusters1<-samples.clusters.updated[[i]]
   the.data<-the.data[, colSums(the.data) > min(table(sample.clusters1[["sample_cluster"]]))]
   the.data[["mgss"]]<-as.vector(sample.clusters1[match(rownames(the.data), sample.clusters1$sampleID), "sample_cluster"])
   the.data[["mgss"]]<-factor(the.data[["mgss"]])
@@ -162,12 +162,12 @@ ggsave("RDS_files/mgSs_oob_err.pdf", height=7, width=6)
 ## Full classifier for use
 mgss.classifier<-list()
 #for (i in c("Lactobacillus_crispatus", "Lactobacillus_gasseri", "Lactobacillus_jensenii", "Lactobacillus_iners", "BVAB1", "Gardnerella_vaginalis")){
-for (i in names(samples.clusters)){
+for (i in names(samples.clusters.updated)[c(1:18,20:26,28:30)]){
   the.data<-as.data.frame(t(ngl.gene.counts.list.mgSs.pa.clean[[i]]))
-  if(i %in% "Gardnerella_vaginalis"){
-    the.data<-as.data.frame(t(ngl.gene.counts.list.mgSs.pa.clean[[i]][,colnames(ngl.gene.counts.list.mgSs.pa.clean[[i]]) %in% names(nReads[nReads > 1000000])]))
+  if(i %in% c("Gardnerella_vaginalis", "Lactobacillus_iners", "Atopobium_vaginae")){
+    the.data<-as.data.frame(t(ngl.gene.counts.list.mgSs.pa.clean[[i]][,colnames(ngl.gene.counts.list.mgSs.pa.clean[[i]]) %in% names(nReads[nReads > 5.5e5])]))
   }
-  sample.clusters1<-samples.clusters[[i]]
+  sample.clusters1<-samples.clusters.updated[[i]]
   the.data<-the.data[, colSums(the.data) > min(table(sample.clusters1[["sample_cluster"]]))]
   the.data[["mgss"]]<-as.vector(sample.clusters1[match(rownames(the.data), sample.clusters1$sampleID), "sample_cluster"])
   the.data<-the.data[!the.data$mgss %in% "untyped", ]
@@ -281,6 +281,16 @@ Reads<-read.delim("PRJEB34536/summary.Abundance.txt")
 rownames(Reads)<-Reads$PC
 Reads$PC<-NULL
 nReads<-as.data.frame(cbind(study="PRJEB34536", nReads=rowSums(Reads), mgCST=class[match(rownames(Reads), class$X), "mgCST"]))
+
+
+ms.class<-class<-read.csv("../../SUPPLEMENTAL_FILES/PRJEB34536/before_1e6/mgSs_classifications_7Jun2023.csv")
+ms.class$type<-"old"
+ggplot(ms.class, aes(y=probability, x=factor(mgss), fill=factor(mgss)))+geom_boxplot()+theme_bw()+facet_wrap(~species, scales="free")+ylab("Density")+theme(legend.position = "none", text=element_text(size=5), rect = element_rect(linewidth = 0.1), line = element_line(linewidth = 0.1))+ggtitle("Old")
+
+ms.class.new<-class<-read.csv("../../SUPPLEMENTAL_FILES/PRJNA576566/mgSs_classifications_7Jun2023.csv")
+ms.class.new$type<-"new"
+ms.class<-rbind(ms.class, ms.class.new)
+ggplot(ms.class.new, aes(y=probability, x=factor(mgss)))+geom_boxplot()+theme_bw()+facet_wrap(~species, scales="free")+ylab("Density")+theme(legend.position = "none", text=element_text(size=5), rect = element_rect(linewidth = 0.1), line = element_line(linewidth = 0.1))+ggtitle("New")
 
 ## External dataset 2 (PRJNA576566)
 class<-read.csv("PRJNA576566/relabund_w_mgCSTs_17May2023.csv")
@@ -962,12 +972,12 @@ ggsave("Liners_mgSs_bv.pdf", height=3 , width=4)
 
 li.s<-tab
 rm(bvornot)
-for (n in unique(li.s$mgss)){
+for (n in unique(li.s$mgSs)){
   print(n)
-  test<-li.s[li.s$mgss == n & !is.na(li.s$bv), ]
-  summary(m<-chisq.test(table(test$bv, test$mgss), p=c(0.458, 0.542)))
-  tab <- cbind(mgCST=n, X2 = as.data.frame(m["statistic"]), p = as.data.frame(m["p.value"]), nSamples=nrow(test), propBV = as.vector(prop.table(table(test$bv)))[1], prop_noBV = as.vector(prop.table(table(test$bv)))[2],  test="X2")
-  rownames(tab)<-tab["mgCST"]
+  test<-li.s[li.s$mgSs == n & !is.na(li.s$bv), ]
+  summary(m<-chisq.test(table(test$bv, test$mgSs), p=c(0.458, 0.542)))
+  tab <- cbind(mgSs=n, X2 = as.data.frame(m["statistic"]), p = as.data.frame(m["p.value"]), nSamples=nrow(test), propBV = as.vector(prop.table(table(test$bv)))[1], prop_noBV = as.vector(prop.table(table(test$bv)))[2],  test="X2")
+  rownames(tab)<-tab["mgSs"]
   if (exists("bvornot")){
     bvornot<-as.data.frame(merge(bvornot, tab, all=TRUE))
     }else{

@@ -273,9 +273,79 @@ saveRDS(genes.clusters, "RDS_files/genes.clusters.RDS")
 
 ```{r SANITY CHECK sequencing coverage for each mgSs 1}
 mgSs.stats<-list()
-meta<-as.data.frame(read_excel("RDS_files/Supplemental_File_6.xlsx", skip=3))
+meta<-as.data.frame(read_excel("RDS_files/File_S6.xlsx", skip=3))
+map<-as.data.frame(read_excel("../../mg_sample_data_sources.xlsx"))
 meta.sub<-meta[,c(1,4)]
 library(ggplot2)
+ngl.abund$sampleID<-rownames(ngl.abund)
+map<-merge(map, ngl.abund)
+
+
+require(lme4)
+all.stats<-data.frame()
+for(i in names(mgSs.stats)){
+  x<-samples.clusters.updated[[i]]
+  for(n in unique(x$sample_cluster)){
+      x<-samples.clusters.updated[[i]]
+      x$sample_coverage<-map[match(x$sampleID, map$sampleID), "Coverage"]
+      x$species_coverage<-map[match(x$sampleID, map$sampleID), i]
+      x$`Number NR genes`<-as.numeric(map[match(x$sampleID, map$sampleID), "Number NR genes"])
+      x$SubjectID<-map[match(x$sampleID, map$sampleID), "SubjectID"]
+      x<-unique(x[,c("sample_coverage", "Number NR genes", "SubjectID", "sample_cluster", "species_coverage")])
+      x$mgss_cat<-factor(ifelse(x$sample_cluster %in% n, 1, 0))
+      x$mgss_cat<-relevel(x$mgss_cat, ref = "0")
+      #the.model<-lm(`Number NR genes`~log10(sample_coverage), data=x)
+      the.model<-glm(mgss_cat~log10(species_coverage), data=x, family = "binomial")
+      tab <- cbind(species=i, mgss=n, exp_coef=as.data.frame(exp(coef(the.model)))[,1], Lconfint = as.data.frame(exp(confint(the.model)))[,1], Uconfint = as.data.frame(exp(confint(the.model)))[,2], p=as.data.frame(summary(the.model)$coef[,4])[,1], type=rownames(as.data.frame(summary(the.model)$coef[,4])), nSamples=table(x$mgss_cat)[2][[1]])
+      #tab <- cbind(species=i, r2=summary(the.model)$adj.r.squared, p=summary(the.model)[["coefficients"]][8])
+  all.stats<-rbind(all.stats, tab)
+  }
+}
+all.stats$padj<-p.adjust(all.stats$p, method="bonferroni")
+write.csv(all.stats, "all.stats.csv", quote=F, row.names=F)
+
+require(lme4)
+all.stats2<-data.frame()
+#for(i in c("Atopobium_vaginae", "Gardnerella_vaginalis", "Lactobacillus_crispatus", "Lactobacillus_iners", "Megasphaera_genomosp.", "Prevotella_bivia")){
+#for(i in c("Atopobium_vaginae", "Gardnerella_vaginalis",  "Lactobacillus_iners")){
+for(i in unique(all.stats[all.stats$padj < 0.05 & grepl("species", all.stats$type) & !all.stats$mgss %in% "untyped", "species"])){
+  x<-samples.clusters.updated[[i]]
+  for(n in unique(x$sample_cluster)){
+      x<-samples.clusters.updated[[i]]
+      x$sample_coverage<-map[match(x$sampleID, map$sampleID), "Coverage"]
+      x$species_coverage<-map[match(x$sampleID, map$sampleID), i]
+      x<-x[x$species_coverage >= 3e3, ]
+      x$`Number NR genes`<-as.numeric(map[match(x$sampleID, map$sampleID), "Number NR genes"])
+      x$SubjectID<-map[match(x$sampleID, map$sampleID), "SubjectID"]
+      x<-unique(x[,c("sample_coverage", "Number NR genes", "SubjectID", "sample_cluster", "species_coverage")])
+      x$mgss_cat<-factor(ifelse(x$sample_cluster %in% n, 1, 0))
+      x$mgss_cat<-relevel(x$mgss_cat, ref = "0")
+      #the.model<-lm(`Number NR genes`~log10(sample_coverage), data=x)
+      the.model<-glm(mgss_cat~log10(species_coverage), data=x, family = "binomial")
+      tab <- cbind(species=i, mgss=n, exp_coef=as.data.frame(exp(coef(the.model)))[,1], Lconfint = as.data.frame(exp(confint(the.model)))[,1], Uconfint = as.data.frame(exp(confint(the.model)))[,2], p=as.data.frame(summary(the.model)$coef[,4])[,1], type=rownames(as.data.frame(summary(the.model)$coef[,4])), nSamples=table(x$mgss_cat)[2][[1]])
+      #tab <- cbind(species=i, r2=summary(the.model)$adj.r.squared, p=summary(the.model)[["coefficients"]][8])
+  all.stats2<-rbind(all.stats2, tab)
+  }
+}
+all.stats2$padj<-p.adjust(all.stats2$p)
+write.csv(all.stats2, "all.stats2.csv", quote=F, row.names=F)
+
+all.stats$exp_coef<-as.numeric(all.stats$exp_coef)
+all.stats$Lconfint<-as.numeric(all.stats$Lconfint)
+all.stats$Uconfint<-as.numeric(all.stats$Uconfint)
+colTbl1<-c(RColorBrewer::brewer.pal(8, "Set3"))
+ggplot(all.stats[all.stats$padj < 0.05 & grepl("species", all.stats$type) & !all.stats$mgss %in% "untyped", ], aes(y=mgss, x=round(exp_coef, 1), color=mgss))+geom_point(size=3)+geom_vline(xintercept = 1)+scale_color_brewer(palette="Set3")+theme_bw()+geom_errorbar(aes(xmin=Lconfint, xmax=Uconfint, y=mgss, x=exp_coef), width=.2, position=position_dodge(.9))+facet_wrap(~species, scales="free")+xlab("Odds of mgSs assignment with greater species coverage")+theme(text=element_text(size=4))
+ggsave("all.stats.before.species.pdf", height=5, width=7) 
+
+
+all.stats2$exp_coef<-as.numeric(all.stats2$exp_coef)
+all.stats2$Lconfint<-as.numeric(all.stats2$Lconfint)
+all.stats2$Uconfint<-as.numeric(all.stats2$Uconfint)
+ggplot(all.stats2[all.stats2$padj < 0.05 & grepl("species_coverage", all.stats2$type) & !all.stats2$mgss %in% "untyped", ], aes(y=mgss, x=round(exp_coef, 1), color=mgss))+geom_point(size=3)+geom_vline(xintercept = 1)+scale_color_brewer(palette="Set3")+theme_bw()+geom_errorbar(aes(xmin=Lconfint, xmax=Uconfint, y=mgss, x=exp_coef), width=.2, position=position_dodge(.9))+facet_wrap(~species, scales="free")+xlab("Odds of mgSs assignment with greater species coverage")+theme(text=element_text(size=4))
+ggsave("all.stats.after.species.pdf", height=5, width=7) 
+
+
+
 for (i in names(samples.clusters)){
   l<-as.data.frame(ngl.abund[i])
   l$sampleID<-rownames(ngl.abund)
