@@ -1,4 +1,4 @@
-# mgCST-classifier (version 1, ONLY COMPATIBLE WITH VIRGO V1, NOT V2). 
+# mgCST-classifier (version 1, ONLY COMPATIBLE WITH VIRGO Version 1). 
 
 ## For VIRGO2 compatible mgCSTs, use VISTA --> https://github.com/JHolm-Lab/VISTA
 
