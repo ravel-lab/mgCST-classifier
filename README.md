@@ -1,4 +1,6 @@
-# mgCST-classifier
+# mgCST-classifier (version 1, ONLY COMPATIBLE WITH VIRGO V1, NOT V2). 
+
+## For VIRGO2 compatible mgCSTs, use VISTA --> https://github.com/JHolm-Lab/VISTA
 
 ## Requirements
 R version 4.2.2 (2022-10-31) or higher<br>
